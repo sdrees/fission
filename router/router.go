@@ -49,7 +49,6 @@ import (
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 
-
 	"github.com/fission/fission/crd"
 	executorClient "github.com/fission/fission/executor/client"
 )
@@ -78,13 +77,8 @@ func Start(port int, executorUrl string) {
 	if err != nil {
 		log.Fatalf("Error connecting to kubernetes API: %v", err)
 	}
-<<<<<<< HEAD
 	restClient := fissionClient.GetCrdClient()
-	poolmgr := poolmgrClient.MakeClient(poolmgrUrl)
-=======
-	restClient := fissionClient.GetTprClient()
 	executor := executorClient.MakeClient(executorUrl)
->>>>>>> Executor layer added on top of pool manager
 	resolver := makeFunctionReferenceResolver(fissionClient)
 	resolver.Sync(restClient)
 	defer func() {
