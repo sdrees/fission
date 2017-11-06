@@ -39,7 +39,7 @@ const (
 type (
 	FuncSvc struct {
 		Function    *metav1.ObjectMeta // function this pod/service is for
-		environment *crd.Environment   // function's environment
+		Environment *crd.Environment   // function's environment
 		Address     string             // Host:Port or IP:Port that the function's service can be reached at.
 		PodName     string             // pod name (within the function namespace)
 
@@ -122,7 +122,7 @@ func (fsc *FunctionServiceCache) service() {
 	}
 }
 
-func (fsc *functionServiceCache) GetByFunction(m *metav1.ObjectMeta) (*FuncSvc, error) {
+func (fsc *FunctionServiceCache) GetByFunction(m *metav1.ObjectMeta) (*FuncSvc, error) {
 	key := crd.CacheKey(m)
 
 	fsvcI, err := fsc.byFunction.Get(key)
@@ -139,8 +139,8 @@ func (fsc *functionServiceCache) GetByFunction(m *metav1.ObjectMeta) (*FuncSvc, 
 }
 
 // TODO: error should be second return
-func (fsc *functionServiceCache) Add(fsvc funcSvc) (error, *FuncSvc) {
-	err, existing := fsc.byFunction.Set(crd.CacheKey(fsvc.function), &fsvc)
+func (fsc *FunctionServiceCache) Add(fsvc FuncSvc) (error, *FuncSvc) {
+	err, existing := fsc.byFunction.Set(crd.CacheKey(fsvc.Function), &fsvc)
 	if err != nil {
 		if existing != nil {
 			f := existing.(*FuncSvc)
@@ -239,7 +239,7 @@ func (fsc *FunctionServiceCache) _deleteByPod(podName string, minAge time.Durati
 	}
 
 	fsc.byFunction.Delete(crd.CacheKey(&m))
-	fsc.byAddress.Delete(fsvc.address)
+	fsc.byAddress.Delete(fsvc.Address)
 	fsc.byPod.Delete(podName)
 	return true, nil
 }
