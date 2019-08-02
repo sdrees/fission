@@ -1,4 +1,0 @@
-baseURL = "http://fission.io/docs/0.3.0"
-languageCode = "en-us"
-title = "Fission: Serverless Functions for Kubernetes"
-theme = "docdock"

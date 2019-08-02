@@ -6,11 +6,20 @@
 
 set -e 
 
-# If we don't have gcloud credentials, bail out of these tests.
-if [ -z "$FISSION_CI_SERVICE_ACCOUNT" ]
+TOOL_DIR=$HOME/tool
+
+if [ ! -d $TOOL_DIR ]
 then
-    echo "Skipping tests, no cluster credentials"
-    exit 0
+    mkdir -p $TOOL_DIR
+fi
+
+# Get staticcheck
+STATICCHECK_VERSION=2019.1.1
+if [ ! -f $TOOL_DIR/staticcheck ]
+then
+    curl -LO https://github.com/dominikh/go-tools/releases/download/${STATICCHECK_VERSION}/staticcheck_linux_amd64
+    chmod +x staticcheck_linux_amd64
+    mv staticcheck_linux_amd64 $TOOL_DIR/staticcheck
 fi
 
 K8SCLI_DIR=$HOME/k8scli
@@ -20,20 +29,28 @@ then
     mkdir -p $K8SCLI_DIR
 fi
 
+# Get helm
+HELM_VERSION=2.14.0
+if [ ! -f $K8SCLI_DIR/helm ] || (helm version --client | grep -v $HELM_VERSION)
+then
+    curl -LO https://storage.googleapis.com/kubernetes-helm/helm-v${HELM_VERSION}-linux-amd64.tar.gz
+    tar xzvf helm-*.tar.gz
+    mv linux-amd64/helm $K8SCLI_DIR/helm
+fi
+
+# If we don't have gcloud credentials, bail out of these tests.
+if [ -z "$FISSION_CI_SERVICE_ACCOUNT" ]
+then
+    echo "Skipping tests, no cluster credentials"
+    exit 0
+fi
+
 # Get kubectl
 if [ ! -f $K8SCLI_DIR/kubectl ]
 then
    curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
    chmod +x ./kubectl
    mv kubectl $K8SCLI_DIR/kubectl
-fi
-
-# Get helm
-if [ ! -f $K8SCLI_DIR/helm ]
-then
-    curl -LO https://storage.googleapis.com/kubernetes-helm/helm-v2.5.1-linux-amd64.tar.gz
-    tar xzvf helm-*.tar.gz
-    mv linux-amd64/helm $K8SCLI_DIR/helm
 fi
 
 mkdir ${HOME}/.kube
@@ -50,9 +67,6 @@ then
     export CLOUDSDK_CORE_DISABLE_PROMPTS=1
     curl https://sdk.cloud.google.com | bash
 fi
-
-# gcloud command
-export PATH=${HOME}/google-cloud-sdk/bin:${PATH}
 
 # ensure we have the gcloud binary
 gcloud version

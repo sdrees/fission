@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -19,23 +20,65 @@ const (
 
 var specialized bool
 
-type BinaryServer struct {
-	fetchedCodePath  string
-	internalCodePath string
-}
+type (
+	BinaryServer struct {
+		fetchedCodePath  string
+		internalCodePath string
+	}
+
+	FunctionLoadRequest struct {
+		// FilePath is an absolute filesystem path to the
+		// function. What exactly is stored here is
+		// env-specific. Optional.
+		FilePath string `json:"filepath"`
+
+		// FunctionName has an environment-specific meaning;
+		// usually, it defines a function within a module
+		// containing multiple functions. Optional; default is
+		// environment-specific.
+		FunctionName string `json:"functionName"`
+
+		// URL to expose this function at. Optional; defaults
+		// to "/".
+		URL string `json:"url"`
+	}
+)
 
 func (bs *BinaryServer) SpecializeHandler(w http.ResponseWriter, r *http.Request) {
 	if specialized {
-		w.WriteHeader(400)
+		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Not a generic container"))
 		return
 	}
 
-	_, err := os.Stat(bs.fetchedCodePath)
+	request := FunctionLoadRequest{}
+
+	codePath := bs.fetchedCodePath
+	err := json.NewDecoder(r.Body).Decode(&request)
+	switch {
+	case err == io.EOF:
+	case err != nil:
+		panic(err)
+	}
+
+	if request.FilePath != "" {
+		fileStat, err := os.Stat(request.FilePath)
+		if err != nil {
+			panic(err)
+		}
+
+		codePath = request.FilePath
+		switch mode := fileStat.Mode(); {
+		case mode.IsDir():
+			codePath = filepath.Join(request.FilePath, request.FunctionName)
+		}
+	}
+
+	_, err = os.Stat(codePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte(bs.fetchedCodePath + ": not found"))
+			w.Write([]byte(codePath + ": not found"))
 			return
 		} else {
 			panic(err)
@@ -45,7 +88,7 @@ func (bs *BinaryServer) SpecializeHandler(w http.ResponseWriter, r *http.Request
 	// Future: Check if executable is correct architecture/executable.
 
 	// Copy the executable to ensure that file is executable and immutable.
-	userFunc, err := ioutil.ReadFile(bs.fetchedCodePath)
+	userFunc, err := ioutil.ReadFile(codePath)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("Failed to read executable."))
@@ -125,6 +168,7 @@ func main() {
 	server := &BinaryServer{*codePath, absInternalCodePath}
 	http.HandleFunc("/", server.InvocationHandler)
 	http.HandleFunc("/specialize", server.SpecializeHandler)
+	http.HandleFunc("/v2/specialize", server.SpecializeHandler)
 
 	fmt.Println("Listening on 8888 ...")
 	err = http.ListenAndServe(":8888", nil)

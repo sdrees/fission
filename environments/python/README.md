@@ -6,6 +6,8 @@ It's a Docker image containing a Python 3.5 runtime, along with a
 dynamic loader.  A few common dependencies are included in the
 requirements.txt file.
 
+Looking for ready-to-run examples? See the [Python examples directory](../../examples/python).
+
 ## Customizing this image
 
 To add package dependencies, edit requirements.txt to add what you
@@ -43,3 +45,23 @@ Or, if you already have an environment, you can update its image:
 
 After this, fission functions that have the env parameter set to the
 same environment name as this command will use this environment.
+
+## Web Server Framework
+
+Python environment build and start a WSGI server, to support high HTTP 
+traffic. As it is applied in different use cases, this provides two server
+frameworks: `bjoern` and `gevent`. They all support high concurrency request.
+
+`bjoern` has good performance on RPS, to be ideal for most light resource 
+utilization cases.
+
+`gevent` is a good supplement because of its internal multi-threads. It 
+supports heavy resource load functions, with well distribution of response 
+time.
+
+Python environment pod remains `bjoern` framework by default. And it runs `gevent` 
+framework by setting the container environment `WSGI_FRAMEWORK` value to `GEVENT`. 
+
+The environment value is configured normally in two ways. One way is to set in Dockerfile 
+and build it into image. The other way is to set in Kubernetes deployment spec during 
+pod running and restart it.

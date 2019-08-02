@@ -1,40 +1,23 @@
-# Go examples
+# Hello World in Go on Fission
 
-The `go` runtime uses the [`plugin` package](https://golang.org/pkg/plugin/) to dynamically load an HTTP handler.
+`hello.go` contains a very simple fission function that says "Hello, World!".
 
-## Requirements
-
-First, set up your fission deployment with the go environment.
-
-```
-fission env create --name go-env --image fission/go-env:1.8.1
-```
-
-To ensure that you build functions using the same version as the
-runtime, fission provides a docker image and helper script for
-building functions.
-
-## Example Usage
-
-### hello.go
-
-`hello.go` is an very basic HTTP handler returning `"Hello, World!"`.
+## Deploying this function on your cluster
 
 ```bash
-# Download the build helper script
-$ curl https://raw.githubusercontent.com/fission/fission/master/environments/go/builder/go-function-build > go-function-build
-$ chmod +x go-function-build
 
-# Build the function as a plugin. Outputs result to 'function.so'
-$ go-function-build hello.go
+# Create the Fission Go environment and function, and wait for the
+# function to build.  (Take a look at the YAML files in the specs
+# directory for details about how the environment and function are
+# specified.)
 
-# Upload the function to fission
-$ fission function create --name hello --env go-env --package function.so
+$ fission spec apply --wait
+1 environment created
+1 package created
+1 function created
 
-# Map /hello to the hello function
-$ fission route create --method GET --url /hello --function hello
+# Now, run the function with the "fission function test" command:
 
-# Run the function
-$ curl http://$FISSION_ROUTER/hello
+$ fission function test --name hello-go
 Hello, World!
 ```

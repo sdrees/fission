@@ -6,41 +6,57 @@
 #
 
 set -euo pipefail
+source $(dirname $0)/../utils.sh
+
+TEST_ID=$(generate_test_id)
+echo "TEST_ID = $TEST_ID"
+
+tmp_dir="/tmp/test-$TEST_ID"
+mkdir -p $tmp_dir
 
 ROOT=$(dirname $0)/../..
 
-echo "Pre-test cleanup"
-fission env delete --name nodejs || true
+env=nodejs-$TEST_ID
+f1=f1-$TEST_ID
+f2=f2-$TEST_ID
+log $f1 $f2
 
-echo "Creating nodejs env"
-fission env create --name nodejs --image fission/node-env
-trap "fission env delete --name nodejs" EXIT
+cleanup() {
+    log "Cleaning up..."
+    clean_resource_by_id $TEST_ID
+    rm -rf $tmp_dir
+}
 
-echo "Writing functions"
-f1=f1-$(date +%s)
-f2=f2-$(date +%s)
-echo $f1 $f2
+if [ -z "${TEST_NOCLEANUP:-}" ]; then
+    trap cleanup EXIT
+else
+    log "TEST_NOCLEANUP is set; not cleaning up test artifacts afterwards."
+fi
+
+log "Creating nodejs env"
+fission env create --name $env --image $NODE_RUNTIME_IMAGE
+
+
 
 for f in $f1 $f2
 do
-    echo "module.exports = function(context, callback) { callback(200, \"$f\n\"); }" > $f.js
+    echo "module.exports = function(context, callback) { callback(200, \"$f\n\"); }" > $tmp_dir/$f.js
 done
 
-echo "Creating functions"
+log "Creating functions"
 for f in $f1 $f2
 do
-    fission fn create --name $f --env nodejs --code $f.js
-    trap "fission fn delete --name $f" EXIT
+    fission fn create --name $f --env $env --code $tmp_dir/$f.js
 done
 
-echo "Waiting for router to catch up"
-sleep 3
+log "Waiting for router to catch up"
+sleep 2
 
-echo "Testing internal routes"
+log "Testing internal routes"
 for f in $f1 $f2
 do
     response=$(curl http://$FISSION_ROUTER/fission-function/$f)
     echo $response | grep $f
 done
 
-echo "All done."
+log "All done."
