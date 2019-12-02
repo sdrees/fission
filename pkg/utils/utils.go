@@ -17,15 +17,27 @@ limitations under the License.
 package utils
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
+	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mholt/archiver"
+	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
+	"golang.org/x/net/context/ctxhttp"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
+	"github.com/fission/fission/pkg/fission-cli/console"
 )
 
 func UrlForFunction(name, namespace string) string {
@@ -91,21 +103,34 @@ func GetTempDir() (string, error) {
 	return dir, err
 }
 
-// FindAllGlobs returns a list of globs of input list.
-func FindAllGlobs(inputList []string) ([]string, error) {
+// FindAllGlobs ignores all hidden files and returns a list of globs of input list.
+func FindAllGlobs(paths ...string) ([]string, error) {
 	files := make([]string, 0)
-	for _, glob := range inputList {
-		f, err := filepath.Glob(glob)
+	for _, p := range paths {
+		// use absolute path to find files
+		path, err := filepath.Abs(p)
 		if err != nil {
-			return nil, fmt.Errorf("Invalid glob %v: %v", glob, err)
+			return nil, errors.Wrapf(err, "error getting absolute path of path '%v'", p)
 		}
-		files = append(files, f...)
+		globs, err := filepath.Glob(path)
+		if err != nil {
+			return nil, errors.Errorf("invalid glob %v: %v", path, err)
+		}
+		for _, f := range globs {
+			// ignore hidden file.
+			if strings.HasPrefix(filepath.Base(f), ".") {
+				console.Verbose(2, "Ignore hidden file '%v'", f)
+				continue
+			}
+			files = append(files, f)
+			// xxx handle excludeGlobs here
+		}
 	}
 	return files, nil
 }
 
-func MakeArchive(targetName string, globs ...string) (string, error) {
-	files, err := FindAllGlobs(globs)
+func MakeZipArchive(targetName string, globs ...string) (string, error) {
+	files, err := FindAllGlobs(globs...)
 	if err != nil {
 		return "", err
 	}
@@ -144,4 +169,81 @@ func GetImagePullPolicy(policy string) apiv1.PullPolicy {
 	default:
 		return apiv1.PullIfNotPresent
 	}
+}
+
+func FileSize(filePath string) (int64, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), err
+}
+
+func GetFileChecksum(fileName string) (*fv1.Checksum, error) {
+	f, err := os.Open(fileName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file %v: %v", fileName, err)
+	}
+	defer f.Close()
+
+	sum, err := GetChecksum(f)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate checksum for %v", fileName)
+	}
+
+	return sum, nil
+}
+
+func GetChecksum(src io.Reader) (*fv1.Checksum, error) {
+	if src == nil {
+		return nil, errors.New("cannot read from nil reader")
+	}
+
+	h := sha256.New()
+
+	_, err := io.Copy(h, src)
+	if err != nil {
+		return nil, err
+	}
+
+	return &fv1.Checksum{
+		Type: fv1.ChecksumTypeSHA256,
+		Sum:  hex.EncodeToString(h.Sum(nil)),
+	}, nil
+}
+
+func IsURL(str string) bool {
+	return strings.HasPrefix(str, "http://") || strings.HasPrefix(str, "https://")
+}
+
+func DownloadUrl(ctx context.Context, httpClient *http.Client, url string, localPath string) error {
+	resp, err := ctxhttp.Get(ctx, httpClient, url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	w, err := os.Create(localPath)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+
+	_, err = io.Copy(w, resp.Body)
+	if err != nil {
+		return err
+	}
+
+	// flushing write buffer to file
+	err = w.Sync()
+	if err != nil {
+		return err
+	}
+
+	err = os.Chmod(localPath, 0600)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

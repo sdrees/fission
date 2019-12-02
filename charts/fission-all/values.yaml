@@ -10,6 +10,7 @@ serviceType: ClusterIP
 routerServiceType: LoadBalancer
 
 ## Image base repository
+## Leave it empty for using existing local image
 repository: index.docker.io
 
 ## Fission image repository
@@ -19,13 +20,13 @@ image: fission/fission-bundle
 pullPolicy: IfNotPresent
 
 ## Fission image version
-imageTag: 1.4.1
+imageTag: 1.7.0-rc.2
 
 ## Fission fetcher repository
 fetcherImage: fission/fetcher
 
 ## Fission fetcher image version
-fetcherImageTag: 1.4.1
+fetcherImageTag: 1.7.0-rc.2
 
 ## Port at which Fission controller service should be exposed
 controllerPort: 31313
@@ -56,11 +57,37 @@ logger:
   fluentdImageRepository: index.docker.io
   fluentdImage: fluent/fluent-bit
   fluentdImageTag: 1.0.4
+  
+  ## Fluent-bit writes/reads it’s own sqlite database to record a history of tracked
+  ## files and a state of offsets, this is very useful to resume a state if the ser-
+  ## vice is restarted. For Kubernetes environment with constraints like OpenShift,
+  ## the containers are limited to write hostPath volume. Hence, we have to enable
+  ## security context and set privileged to true.
+  enableSecurityContext: false
+
+executor:
+  adoptExistingResources: false
 
 ## Router config
 router:
+  deployAsDaemonSet: false
   svcAddressMaxRetries: 5
   svcAddressUpdateTimeout: 30s
+  
+  ## Display endpoint access logs
+  ## To be aware of enabling logging endpoint access log, it increases
+  ## router resource utilization when under heavy workloads.
+  displayAccessLog: false
+  
+  ## Add annotations for router
+  # svcAnnotations:
+  #   cloud.google.com/load-balancer-type: Internal
+  
+  ## For router to match encoded path.
+  ## If true, "/foo%2Fbar" will match the path "/{var}";
+  ## Otherwise, it will match the path "/foo/bar".
+  useEncodedPath: false
+  
   roundTrip:
     ## If true, router will disable the HTTP keep-alive which result in performance degradation.
     ## But it ensures that router can redirect new coming requests to new function pods.
@@ -87,6 +114,9 @@ router:
     ## Max retries times of a failed request
     maxRetries: 10
 
+  ## Sample with a rate per time window (traces/second)
+  traceSamplingRate: 0.5
+
 ## Message queue trigger config
 ### NATS Streaming, enabled by default
 nats:
@@ -103,7 +133,25 @@ azureStorageQueue:
 ## Kafka: enable and configure the details
 kafka:
   enabled: false
-  brokers: 'broker.kafka:9092'
+  # note: below link is only for reference. 
+  # Please use the brokers link for your kafka here. 
+  brokers: 'broker.kafka:9092' # or your-bootstrap-server.kafka:9092/9093
+  authentication:
+    tls:
+      enabled: false
+      caCert: '' # path to certificate containing public key of CA authority
+      userCert: '' # path to certificate containing public key of the user signed by CA authority
+      userKey: '' # path to private key of the user
+
+  # brokers: 'my-broker.kafka:9092' # or my-bootstrap-server.kafka:9092/9093
+  # Sample config for authentication
+  #   authentication:
+  #   tls:
+  #     enabled: true
+  #     caCert: 'auth/kafka/ca.crt'
+  #     userCert: 'auth/kafka/user.crt'
+  #     userKey: 'auth/kafka/user.key'
+
   ## version of Kafka broker
   ## For 0.x it must be a string in the format
   ## "major.minor.veryMinor.patch" example: 0.8.2.0
@@ -139,7 +187,7 @@ persistence:
 ## Extend the container specs for the core fission pods. 
 ## Can be used to add things like affinty/tolerations/nodeSelectors/etc.
 ## For example:
-## extraCoreComponmentPodConfig:
+## extraCoreComponentPodConfig:
 ##   affinity:
 ##     nodeAffinity:
 ##       requiredDuringSchedulingIgnoredDuringExecution:
@@ -149,7 +197,7 @@ persistence:
 ##               operator: In
 ##               values:
 ##                 - app
-extraCoreComponmentPodConfig:
+#extraCoreComponentPodConfig:
 #  affinity:
 #  tolerations:
 #  nodeSelector:
@@ -176,8 +224,14 @@ preUpgradeChecksImage: fission/pre-upgrade-checks
 ## summary is returned as part of http response
 debugEnv: false
 
-## set this flag to true if prometheus needs to be deployed along with fission
-prometheusDeploy: true
+## Prometheus for scrapping service metrics
+prometheus:
+  ## set this flag to true if prometheus needs to be deployed along with fission
+  enabled: true
+  
+  ## If enabled is false, please assign the prometheus service URL
+  ## that is accessible by components.
+  serviceEndpoint: ""
 
 ## set this flag to false if you dont need canary deployment feature
 canaryDeployment:

@@ -25,6 +25,7 @@ import (
 	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	k8sCache "k8s.io/client-go/tools/cache"
@@ -52,14 +53,13 @@ type HTTPTriggerSet struct {
 	functions                  []fv1.Function
 	funcStore                  k8sCache.Store
 	funcController             k8sCache.Controller
-	recorderSet                *RecorderSet
 	updateRouterRequestChannel chan struct{}
 	tsRoundTripperParams       *tsRoundTripperParams
 	isDebugEnv                 bool
 	svcAddrUpdateThrottler     *throttler.Throttler
 }
 
-func makeHTTPTriggerSet(logger *zap.Logger, fmap *functionServiceMap, frmap *functionRecorderMap, trmap *triggerRecorderMap, fissionClient *crd.FissionClient,
+func makeHTTPTriggerSet(logger *zap.Logger, fmap *functionServiceMap, fissionClient *crd.FissionClient,
 	kubeClient *kubernetes.Clientset, executor *executorClient.Client, crdClient *rest.RESTClient, params *tsRoundTripperParams, isDebugEnv bool, actionThrottler *throttler.Throttler) (*HTTPTriggerSet, k8sCache.Store, k8sCache.Store) {
 
 	httpTriggerSet := &HTTPTriggerSet{
@@ -70,14 +70,14 @@ func makeHTTPTriggerSet(logger *zap.Logger, fmap *functionServiceMap, frmap *fun
 		kubeClient:                 kubeClient,
 		executor:                   executor,
 		crdClient:                  crdClient,
-		updateRouterRequestChannel: make(chan struct{}),
+		updateRouterRequestChannel: make(chan struct{}, 10), // use buffer channel
 		tsRoundTripperParams:       params,
 		isDebugEnv:                 isDebugEnv,
 		svcAddrUpdateThrottler:     actionThrottler,
 	}
-	var tStore, fnStore, rStore k8sCache.Store
+	var tStore, fnStore k8sCache.Store
 	var tController, fnController k8sCache.Controller
-	var recorderSet *RecorderSet
+
 	if httpTriggerSet.crdClient != nil {
 		tStore, tController = httpTriggerSet.initTriggerController()
 		httpTriggerSet.triggerStore = tStore
@@ -86,29 +86,23 @@ func makeHTTPTriggerSet(logger *zap.Logger, fmap *functionServiceMap, frmap *fun
 		httpTriggerSet.funcStore = fnStore
 		httpTriggerSet.funcController = fnController
 	}
-	recorderSet = MakeRecorderSet(logger, httpTriggerSet, crdClient, rStore, frmap, trmap)
-	httpTriggerSet.recorderSet = recorderSet
 	return httpTriggerSet, tStore, fnStore
 }
 
 func (ts *HTTPTriggerSet) subscribeRouter(ctx context.Context, mr *mutableRouter, resolver *functionReferenceResolver) {
 	ts.resolver = resolver
 	ts.mutableRouter = mr
-	mr.updateRouter(ts.getRouter())
 
 	if ts.fissionClient == nil {
 		// Used in tests only.
+		mr.updateRouter(ts.getRouter(nil))
 		ts.logger.Info("skipping continuous trigger updates")
 		return
 	}
 	go ts.updateRouter()
+	go ts.syncTriggers()
 	go ts.runWatcher(ctx, ts.funcController)
 	go ts.runWatcher(ctx, ts.triggerController)
-	if ts.recorderSet.recController != nil {
-		go ts.runWatcher(ctx, ts.recorderSet.recController)
-	} else {
-		ts.logger.Fatal("failed to run recorder controller")
-	}
 }
 
 func defaultHomeHandler(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +113,7 @@ func routerHealthHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (ts *HTTPTriggerSet) getRouter() *mux.Router {
+func (ts *HTTPTriggerSet) getRouter(fnTimeoutMap map[types.UID]int) *mux.Router {
 	muxRouter := mux.NewRouter()
 
 	// HTTP triggers setup by the user
@@ -138,12 +132,6 @@ func (ts *HTTPTriggerSet) getRouter() *mux.Router {
 			continue
 		}
 
-		var recorderName string
-		recorder, err := ts.recorderSet.triggerRecorderMap.lookup(trigger.Metadata.Name)
-		if err == nil && recorder != nil {
-			recorderName = recorder.Spec.Name
-		}
-
 		if rr.resolveResultType != resolveResultSingleFunction && rr.resolveResultType != resolveResultMultipleFunctions {
 			// not implemented yet
 			ts.logger.Panic("resolve result type not implemented", zap.Any("type", rr.resolveResultType))
@@ -152,16 +140,14 @@ func (ts *HTTPTriggerSet) getRouter() *mux.Router {
 		fh := &functionHandler{
 			logger:                   ts.logger.Named(trigger.Metadata.Name),
 			fmap:                     ts.functionServiceMap,
-			frmap:                    ts.recorderSet.functionRecorderMap,
-			trmap:                    ts.recorderSet.triggerRecorderMap,
 			executor:                 ts.executor,
 			httpTrigger:              &trigger,
-			functionMetadataMap:      rr.functionMetadataMap,
+			functionMap:              rr.functionMap,
 			fnWeightDistributionList: rr.functionWtDistributionList,
 			tsRoundTripperParams:     ts.tsRoundTripperParams,
-			recorderName:             recorderName,
 			isDebugEnv:               ts.isDebugEnv,
 			svcAddrUpdateThrottler:   ts.svcAddrUpdateThrottler,
+			functionTimeoutMap:       fnTimeoutMap,
 		}
 
 		// The functionHandler for HTTP trigger with fn reference type "FunctionReferenceTypeFunctionName",
@@ -172,8 +158,8 @@ func (ts *HTTPTriggerSet) getRouter() *mux.Router {
 		// deployment. For more details, please check "handler" function of functionHandler.
 
 		if rr.resolveResultType == resolveResultSingleFunction {
-			for _, metadata := range fh.functionMetadataMap {
-				fh.function = metadata
+			for _, fn := range fh.functionMap {
+				fh.function = fn
 			}
 		}
 
@@ -199,28 +185,19 @@ func (ts *HTTPTriggerSet) getRouter() *mux.Router {
 
 	// Internal triggers for each function by name. Non-http
 	// triggers route into these.
-	for _, function := range ts.functions {
-		m := function.Metadata
-
-		var recorderName string
-		recorder, err := ts.recorderSet.functionRecorderMap.lookup(m.Name)
-		if err == nil && recorder != nil {
-			recorderName = recorder.Spec.Name
-		}
-
+	for i := range ts.functions {
+		fn := ts.functions[i]
 		fh := &functionHandler{
-			logger:                 ts.logger.Named(m.Name),
+			logger:                 ts.logger.Named(fn.Metadata.Name),
 			fmap:                   ts.functionServiceMap,
-			frmap:                  ts.recorderSet.functionRecorderMap,
-			trmap:                  ts.recorderSet.triggerRecorderMap,
-			function:               &m,
+			function:               &fn,
 			executor:               ts.executor,
 			tsRoundTripperParams:   ts.tsRoundTripperParams,
-			recorderName:           recorderName,
 			isDebugEnv:             ts.isDebugEnv,
 			svcAddrUpdateThrottler: ts.svcAddrUpdateThrottler,
+			functionTimeoutMap:     fnTimeoutMap,
 		}
-		muxRouter.HandleFunc(utils.UrlForFunction(function.Metadata.Name, function.Metadata.Namespace), fh.handler)
+		muxRouter.HandleFunc(utils.UrlForFunction(fn.Metadata.Name, fn.Metadata.Namespace), fh.handler)
 	}
 
 	// Healthz endpoint for the router.
@@ -242,20 +219,11 @@ func (ts *HTTPTriggerSet) initTriggerController() (k8sCache.Store, k8sCache.Cont
 				trigger := obj.(*fv1.HTTPTrigger)
 				go createIngress(ts.logger, trigger, ts.kubeClient)
 				ts.syncTriggers()
-				// Check if this trigger's function needs to be recorded
-				fnRef := trigger.Spec.FunctionReference.Name
-				recorder, err := ts.recorderSet.functionRecorderMap.lookup(fnRef)
-				if err == nil {
-					if len(recorder.Spec.Triggers) == 0 {
-						ts.recorderSet.triggerRecorderMap.assign(trigger.Metadata.Name, recorder)
-					}
-				}
 			},
 			DeleteFunc: func(obj interface{}) {
 				ts.syncTriggers()
 				trigger := obj.(*fv1.HTTPTrigger)
 				go deleteIngress(ts.logger, trigger, ts.kubeClient)
-				go ts.recorderSet.DeleteTriggerFromRecorderMap(trigger)
 			},
 			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
 				oldTrigger := oldObj.(*fv1.HTTPTrigger)
@@ -281,9 +249,7 @@ func (ts *HTTPTriggerSet) initFunctionController() (k8sCache.Store, k8sCache.Con
 				ts.syncTriggers()
 			},
 			DeleteFunc: func(obj interface{}) {
-				function := obj.(*fv1.Function)
 				ts.syncTriggers()
-				go ts.recorderSet.DeleteFunctionFromRecorderMap(function)
 			},
 			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
 				oldFn := oldObj.(*fv1.Function)
@@ -296,8 +262,8 @@ func (ts *HTTPTriggerSet) initFunctionController() (k8sCache.Store, k8sCache.Con
 				// update resolver function reference cache
 				for key, rr := range ts.resolver.copy() {
 					if key.namespace == fn.Metadata.Namespace &&
-						rr.functionMetadataMap[fn.Metadata.Name] != nil &&
-						rr.functionMetadataMap[fn.Metadata.Name].ResourceVersion != fn.Metadata.ResourceVersion {
+						rr.functionMap[fn.Metadata.Name] != nil &&
+						rr.functionMap[fn.Metadata.Name].Metadata.ResourceVersion != fn.Metadata.ResourceVersion {
 						// invalidate resolver cache
 						ts.logger.Debug("invalidating resolver cache")
 						err := ts.resolver.delete(key.namespace, key.triggerName, key.triggerResourceVersion)
@@ -310,29 +276,6 @@ func (ts *HTTPTriggerSet) initFunctionController() (k8sCache.Store, k8sCache.Con
 				ts.syncTriggers()
 			},
 		})
-	return store, controller
-}
-
-func (ts *HTTPTriggerSet) initRecorderController() (k8sCache.Store, k8sCache.Controller) {
-	resyncPeriod := 30 * time.Second
-	listWatch := k8sCache.NewListWatchFromClient(ts.crdClient, "recorders", metav1.NamespaceAll, fields.Everything())
-	store, controller := k8sCache.NewInformer(listWatch, &fv1.Recorder{}, resyncPeriod,
-		k8sCache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				recorder := obj.(*fv1.Recorder)
-				ts.recorderSet.newRecorder(recorder)
-			},
-			DeleteFunc: func(obj interface{}) {
-				recorder := obj.(*fv1.Recorder)
-				ts.recorderSet.disableRecorder(recorder)
-			},
-			UpdateFunc: func(oldObj, newObj interface{}) {
-				oldRecorder := oldObj.(*fv1.Recorder)
-				newRecorder := newObj.(*fv1.Recorder)
-				ts.recorderSet.updateRecorder(oldRecorder, newRecorder)
-			},
-		},
-	)
 	return store, controller
 }
 
@@ -358,13 +301,16 @@ func (ts *HTTPTriggerSet) updateRouter() {
 
 		// get functions
 		latestFunctions := ts.funcStore.List()
+		functionTimeout := make(map[types.UID]int, len(latestFunctions))
 		functions := make([]fv1.Function, len(latestFunctions))
 		for _, f := range latestFunctions {
+			fn := *f.(*fv1.Function)
+			functionTimeout[fn.Metadata.UID] = fn.Spec.FunctionTimeout
 			functions = append(functions, *f.(*fv1.Function))
 		}
 		ts.functions = functions
 
 		// make a new router and use it
-		ts.mutableRouter.updateRouter(ts.getRouter())
+		ts.mutableRouter.updateRouter(ts.getRouter(functionTimeout))
 	}
 }

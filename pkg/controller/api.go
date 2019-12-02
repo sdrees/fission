@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"runtime/debug"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -54,7 +53,6 @@ type (
 		builderManagerUrl string
 		workflowApiUrl    string
 		functionNamespace string
-		useIstio          bool
 		featureStatus     map[string]string
 	}
 
@@ -111,11 +109,10 @@ func (api *API) respondWithSuccess(w http.ResponseWriter, resp []byte) {
 }
 
 func (api *API) respondWithError(w http.ResponseWriter, err error) {
-	debug.PrintStack()
-
 	// this error type comes with an HTTP code, so just use that
 	se, ok := err.(*kerrors.StatusError)
 	if ok {
+		api.logger.Error(err.Error(), zap.Int32("code", se.ErrStatus.Code))
 		http.Error(w, string(se.ErrStatus.Reason), int(se.ErrStatus.Code))
 		return
 	}
@@ -169,7 +166,7 @@ func (api *API) getLogDBConfig(dbType string) logDBConfig {
 
 func (api *API) HomeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	fmt.Fprintf(w, info.ApiInfo().String())
+	w.Write([]byte(info.ApiInfo().String()))
 }
 
 func (api *API) ApiVersionMismatchHandler(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +190,7 @@ func (api *API) GetSvcName(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, service.Name+"."+podNamespace)
 }
 
-func (api *API) Serve(port int) {
+func (api *API) GetHandler() http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/healthz", api.HealthHandler).Methods("GET")
 	// Give a useful error message if an older CLI attempts to make a request
@@ -242,19 +239,6 @@ func (api *API) Serve(port int) {
 	r.HandleFunc("/v2/triggers/messagequeue/{mqTrigger}", api.MessageQueueTriggerApiUpdate).Methods("PUT")
 	r.HandleFunc("/v2/triggers/messagequeue/{mqTrigger}", api.MessageQueueTriggerApiDelete).Methods("DELETE")
 
-	r.HandleFunc("/v2/recorders", api.RecorderApiList).Methods("GET")
-	r.HandleFunc("/v2/recorders", api.RecorderApiCreate).Methods("POST")
-	r.HandleFunc("/v2/recorders/{recorder}", api.RecorderApiGet).Methods("GET")
-	r.HandleFunc("/v2/recorders/{recorder}", api.RecorderApiUpdate).Methods("PUT")
-	r.HandleFunc("/v2/recorders/{recorder}", api.RecorderApiDelete).Methods("DELETE")
-
-	r.HandleFunc("/v2/records", api.RecordsApiListAll).Methods("GET")
-	r.HandleFunc("/v2/records/function/{function}", api.RecordsApiFilterByFunction).Methods("GET")
-	r.HandleFunc("/v2/records/trigger/{trigger}", api.RecordsApiFilterByTrigger).Methods("GET")
-	r.HandleFunc("/v2/records/time", api.RecordsApiFilterByTime).Methods("GET")
-
-	r.HandleFunc("/v2/replay/{reqUID}", api.ReplayByReqUID).Methods("GET")
-
 	r.HandleFunc("/v2/secrets/{secret}", api.SecretGet).Methods("GET")
 	r.HandleFunc("/v2/configmaps/{configmap}", api.ConfigMapGet).Methods("GET")
 
@@ -270,9 +254,14 @@ func (api *API) Serve(port int) {
 	r.HandleFunc("/proxy/workflows-apiserver/{path:.*}", api.WorkflowApiserverProxy)
 	r.HandleFunc("/proxy/svcname", api.GetSvcName).Queries("application", "").Methods("GET")
 
-	address := fmt.Sprintf(":%v", port)
+	r.Handle("/v2/apidocs.json", openAPI()).Methods("GET")
 
+	return r
+}
+
+func (api *API) Serve(port int) {
+	address := fmt.Sprintf(":%v", port)
 	api.logger.Info("server started", zap.Int("port", port))
-	err := http.ListenAndServe(address, r)
+	err := http.ListenAndServe(address, api.GetHandler())
 	api.logger.Fatal("done listening", zap.Error(err))
 }

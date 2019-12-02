@@ -20,13 +20,17 @@ data:
 {{ fail "invalid chart" }}
 {{- end }}
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: logger
   labels:
     chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+    svc: logger
 spec:
+  selector:
+    matchLabels:
+      svc: logger
   template:
     metadata:
       labels:
@@ -35,15 +39,24 @@ spec:
       initContainers:
         - name: init
           image: busybox
+          imagePullPolicy: {{ .Values.pullPolicy }}
           command: ['mkdir', '-p', '/var/log/fission']
           volumeMounts:
             - name: container-log
               mountPath: /var/log/
               readOnly: false
+{{- if .Values.logger.enableSecurityContext }}
+          securityContext:
+            privileged: true
+{{- end }}
       containers:
         - name: logger
+{{ if .Values.repository }}
           image: "{{ .Values.repository }}/{{ .Values.image }}:{{ .Values.imageTag }}"
-          imagePullPolicy: IfNotPresent
+{{ else }}
+          image: "{{ .Values.image }}:{{ .Values.imageTag }}"
+{{ end }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
           env:
             - name: NODE_NAME
               valueFrom:
@@ -59,8 +72,16 @@ spec:
             - name: docker-log
               mountPath: /var/lib/docker/containers
               readOnly: true
+{{- if .Values.logger.enableSecurityContext }}
+          securityContext:
+            privileged: true
+{{- end }}
         - name: fluentbit
+{{- if .Values.repository }}
           image: "{{ .Values.logger.fluentdImageRepository }}/{{ .Values.logger.fluentdImage }}:{{ .Values.logger.fluentdImageTag }}"
+{{ else }}
+          image: "{{ .Values.logger.fluentdImage }}:{{ .Values.logger.fluentdImageTag }}"
+{{- end }}
           imagePullPolicy: {{ .Values.pullPolicy }}
           # CMD ["/fluent-bit/bin/fluent-bit", "-c", "/fluent-bit/etc/fluent-bit.conf"]
           command: ["/fluent-bit/bin/fluent-bit", "-c", "/fluent-bit/etc/fluentbit.conf"]
@@ -83,6 +104,10 @@ spec:
                   key: password
             - name: LOG_PATH
               value: /var/log/fission/*.log
+{{- if .Values.logger.enableSecurityContext }}
+          securityContext:
+            privileged: true
+{{- end }}
           volumeMounts:
             - name: container-log
               mountPath: /var/log/
@@ -93,7 +118,7 @@ spec:
             - name: fluentbit-config
               mountPath: /fluent-bit/etc/
               readOnly: true
-      serviceAccount: fission-svc
+      serviceAccountName: fission-svc
       volumes:
         - name: container-log
           hostPath:

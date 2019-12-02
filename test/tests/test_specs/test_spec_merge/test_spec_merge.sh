@@ -9,8 +9,8 @@ fn_nd=nodehellond
 
 cleanup() {
     echo "Cleaning up..."
-    popd
     fission spec destroy || true
+    popd
 }
 
 trap cleanup EXIT
@@ -20,7 +20,6 @@ pushd $(dirname $0)
 fission spec apply
 
 fission fn test --name $fn_p
-
 fission fn test --name $fn_nd
 
 hnd=$(kubectl -n $FUNCTION_NAMESPACE get deployment -l=functionName=$fn_nd -ojsonpath='{.items[0].spec.template.spec.hostname}')

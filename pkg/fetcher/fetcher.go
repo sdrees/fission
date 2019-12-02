@@ -19,11 +19,8 @@ package fetcher
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -35,7 +32,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 	"go.opencensus.io/plugin/ochttp"
 	"go.uber.org/zap"
-	"golang.org/x/net/context/ctxhttp"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -47,6 +43,7 @@ import (
 	"github.com/fission/fission/pkg/info"
 	storageSvcClient "github.com/fission/fission/pkg/storagesvc/client"
 	"github.com/fission/fission/pkg/types"
+	"github.com/fission/fission/pkg/utils"
 )
 
 type (
@@ -97,59 +94,6 @@ func MakeFetcher(logger *zap.Logger, sharedVolumePath string, sharedSecretPath s
 	}, nil
 }
 
-func downloadUrl(ctx context.Context, httpClient *http.Client, url string, localPath string) error {
-	resp, err := ctxhttp.Get(ctx, httpClient, url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	w, err := os.Create(localPath)
-	if err != nil {
-		return err
-	}
-	defer w.Close()
-
-	_, err = io.Copy(w, resp.Body)
-	if err != nil {
-		return err
-	}
-
-	// flushing write buffer to file
-	err = w.Sync()
-	if err != nil {
-		return err
-	}
-
-	err = os.Chmod(localPath, 0600)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func getChecksum(path string) (*fv1.Checksum, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	hasher := sha256.New()
-	_, err = io.Copy(hasher, f)
-	if err != nil {
-		return nil, err
-	}
-
-	c := hex.EncodeToString(hasher.Sum(nil))
-
-	return &fv1.Checksum{
-		Type: fv1.ChecksumTypeSHA256,
-		Sum:  c,
-	}, nil
-}
-
 func verifyChecksum(fileChecksum, checksum *fv1.Checksum) error {
 	if checksum.Type != fv1.ChecksumTypeSHA256 {
 		return ferror.MakeError(ferror.ErrorInvalidArgument, "Unsupported checksum type")
@@ -173,7 +117,7 @@ func writeSecretOrConfigMap(dataMap map[string][]byte, dirPath string) error {
 
 func (fetcher *Fetcher) VersionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	fmt.Fprintf(w, info.BuildInfo().String())
+	w.Write([]byte(info.BuildInfo().String()))
 }
 
 func (fetcher *Fetcher) FetchHandler(w http.ResponseWriter, r *http.Request) {
@@ -253,8 +197,8 @@ func (fetcher *Fetcher) SpecializeHandler(w http.ResponseWriter, r *http.Request
 
 	err = fetcher.SpecializePod(r.Context(), req.FetchReq, req.LoadReq)
 	if err != nil {
-		fetcher.logger.Error("error specialing pod", zap.Error(err))
-		w.WriteHeader(http.StatusInternalServerError)
+		fetcher.logger.Error("error specializing pod", zap.Error(err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -285,7 +229,7 @@ func (fetcher *Fetcher) Fetch(ctx context.Context, pkg *fv1.Package, req types.F
 
 	if req.FetchType == types.FETCH_URL {
 		// fetch the file and save it to the tmp path
-		err := downloadUrl(ctx, fetcher.httpClient, req.Url, tmpPath)
+		err := utils.DownloadUrl(ctx, fetcher.httpClient, req.Url, tmpPath)
 		if err != nil {
 			e := "failed to download url"
 			fetcher.logger.Error(e, zap.Error(err), zap.String("url", req.Url))
@@ -309,7 +253,10 @@ func (fetcher *Fetcher) Fetch(ctx context.Context, pkg *fv1.Package, req types.F
 				return http.StatusInternalServerError, errors.New(fmt.Sprintf("%s: pkg %s.%s has a status of %s", e, pkg.Metadata.Name, pkg.Metadata.Namespace, pkg.Status.BuildStatus))
 			}
 			archive = &pkg.Spec.Deployment
+		} else {
+			return http.StatusBadRequest, fmt.Errorf("unkonwn fetch type: %v", req.FetchType)
 		}
+
 		// get package data as literal or by url
 		if len(archive.Literal) > 0 {
 			// write pkg.Literal into tmpPath
@@ -321,25 +268,27 @@ func (fetcher *Fetcher) Fetch(ctx context.Context, pkg *fv1.Package, req types.F
 			}
 		} else {
 			// download and verify
-			err := downloadUrl(ctx, fetcher.httpClient, archive.URL, tmpPath)
+			err := utils.DownloadUrl(ctx, fetcher.httpClient, archive.URL, tmpPath)
 			if err != nil {
 				e := "failed to download url"
 				fetcher.logger.Error(e, zap.Error(err), zap.String("url", req.Url))
 				return http.StatusBadRequest, errors.Wrapf(err, "%s %s", e, req.Url)
 			}
 
-			checksum, err := getChecksum(tmpPath)
-			if err != nil {
-				e := "failed to get checksum"
-				fetcher.logger.Error(e, zap.Error(err))
-				return http.StatusBadRequest, errors.Wrap(err, e)
-			}
-
-			err = verifyChecksum(checksum, &archive.Checksum)
-			if err != nil {
-				e := "failed to verify checksum"
-				fetcher.logger.Error(e, zap.Error(err))
-				return http.StatusBadRequest, errors.Wrap(err, e)
+			// check file integrity only if checksum is not empty.
+			if len(archive.Checksum.Sum) > 0 {
+				checksum, err := utils.GetFileChecksum(tmpPath)
+				if err != nil {
+					e := "failed to get checksum"
+					fetcher.logger.Error(e, zap.Error(err))
+					return http.StatusBadRequest, errors.Wrap(err, e)
+				}
+				err = verifyChecksum(checksum, &archive.Checksum)
+				if err != nil {
+					e := "failed to verify checksum"
+					fetcher.logger.Error(e, zap.Error(err))
+					return http.StatusBadRequest, errors.Wrap(err, e)
+				}
 			}
 		}
 	}
@@ -534,7 +483,7 @@ func (fetcher *Fetcher) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sum, err := getChecksum(dstFilepath)
+	sum, err := utils.GetFileChecksum(dstFilepath)
 	if err != nil {
 		e := "error calculating checksum of zip file"
 		fetcher.logger.Error(e, zap.Error(err), zap.String("file", dstFilepath))

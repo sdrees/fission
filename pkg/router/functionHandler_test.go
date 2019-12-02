@@ -17,6 +17,8 @@ limitations under the License.
 package router
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -54,12 +57,12 @@ func TestFunctionProxying(t *testing.T) {
 	backendURL := createBackendService(testResponseString)
 	log.Printf("Created backend svc at %v", backendURL)
 
-	fn := &metav1.ObjectMeta{Name: "foo", Namespace: metav1.NamespaceDefault}
+	fnMeta := metav1.ObjectMeta{Name: "foo", Namespace: metav1.NamespaceDefault}
 	logger, err := zap.NewDevelopment()
 	panicIf(err)
 
 	fmap := makeFunctionServiceMap(logger, 0)
-	fmap.assign(fn, backendURL)
+	fmap.assign(&fnMeta, backendURL)
 
 	httpTrigger := &fv1.HTTPTrigger{
 		Metadata: metav1.ObjectMeta{
@@ -75,9 +78,11 @@ func TestFunctionProxying(t *testing.T) {
 	}
 
 	fh := &functionHandler{
-		logger:   logger,
-		fmap:     fmap,
-		function: fn,
+		logger: logger,
+		fmap:   fmap,
+		function: &fv1.Function{
+			Metadata: metav1.ObjectMeta{Name: "foo", Namespace: metav1.NamespaceDefault},
+		},
 		tsRoundTripperParams: &tsRoundTripperParams{
 			timeout:         50 * time.Millisecond,
 			timeoutExponent: 2,
@@ -89,4 +94,37 @@ func TestFunctionProxying(t *testing.T) {
 	fhURL := functionHandlerServer.URL
 
 	testRequest(fhURL, testResponseString)
+}
+
+func TestProxyErrorHandler(t *testing.T) {
+	logger, err := zap.NewDevelopment()
+	assert.Nil(t, err)
+
+	fh := &functionHandler{
+		logger: logger,
+		function: &fv1.Function{
+			Metadata: metav1.ObjectMeta{
+				Name:      "dummy",
+				Namespace: "dummy-bar",
+			},
+		},
+	}
+
+	errHandler := fh.getProxyErrorHandler(time.Now(), &RetryingRoundTripper{})
+
+	req, err := http.NewRequest("GET", "http://foobar.com", nil)
+	assert.Nil(t, err)
+
+	req.Header.Set("foo", "bar")
+	respRecorder := httptest.NewRecorder()
+	errHandler(respRecorder, req, context.Canceled)
+	assert.Equal(t, 499, respRecorder.Code)
+
+	respRecorder = httptest.NewRecorder()
+	errHandler(respRecorder, req, context.DeadlineExceeded)
+	assert.Equal(t, http.StatusGatewayTimeout, respRecorder.Code)
+
+	respRecorder = httptest.NewRecorder()
+	errHandler(respRecorder, req, errors.New("dummy"))
+	assert.Equal(t, http.StatusBadGateway, respRecorder.Code)
 }

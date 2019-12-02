@@ -22,15 +22,14 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	influxdbClient "github.com/influxdata/influxdb/client/v2"
+	"github.com/pkg/errors"
 
 	ferror "github.com/fission/fission/pkg/error"
-	"github.com/fission/fission/pkg/fission-cli/log"
 )
 
 const (
@@ -66,20 +65,25 @@ func (influx InfluxDB) GetLogs(filter LogFilter) ([]LogEntry, error) {
 	parameters["time"] = timestamp
 	//the parameters above are only for the where clause and do not work with LIMIT
 
+	orderCondition := " order by \"time\" asc"
+	if filter.Reverse {
+		orderCondition = " order by \"time\" desc"
+	}
+
 	if filter.Pod != "" {
 		// wait for bug fix for fluent-bit influxdb plugin
-		queryCmd = "select * from /^log*/ where (\"funcuid\" = $funcuid OR \"kubernetes_labels_functionUid\" = $funcuid) AND \"pod\" = $pod AND \"time\" > $time LIMIT " + strconv.Itoa(filter.RecordLimit)
+		queryCmd = "select * from /^log*/ where (\"funcuid\" = $funcuid OR \"kubernetes_labels_functionUid\" = $funcuid) AND \"pod\" = $pod AND \"time\" > $time " + orderCondition + " LIMIT " + strconv.Itoa(filter.RecordLimit)
 		parameters["pod"] = filter.Pod
 	} else {
 		// wait for bug fix for fluent-bit influxdb plugin
-		queryCmd = "select * from /^log*/ where (\"funcuid\" = $funcuid  OR \"kubernetes_labels_functionUid\" = $funcuid) AND \"time\" > $time LIMIT " + strconv.Itoa(filter.RecordLimit)
+		queryCmd = "select * from /^log*/ where (\"funcuid\" = $funcuid  OR \"kubernetes_labels_functionUid\" = $funcuid) AND \"time\" > $time " + orderCondition + " LIMIT " + strconv.Itoa(filter.RecordLimit)
 	}
 
 	query := influxdbClient.NewQueryWithParameters(queryCmd, INFLUXDB_DATABASE, "", parameters)
 	logEntries := []LogEntry{}
 	response, err := influx.query(query)
 	if err != nil {
-		return logEntries, err
+		return nil, err
 	}
 	for _, r := range response.Results {
 		for _, series := range r.Series {
@@ -103,11 +107,11 @@ func (influx InfluxDB) GetLogs(filter LogFilter) ([]LogEntry, error) {
 			for _, row := range series.Values {
 				t, err := time.Parse(time.RFC3339, row[0].(string))
 				if err != nil {
-					log.Fatal(err)
+					return nil, err
 				}
 				seqNum, err := strconv.Atoi(row[seq].(string))
 				if err != nil {
-					return logEntries, err
+					return nil, err
 				}
 				entry := LogEntry{
 					//The attributes of the LogEntry are selected as relative to their position in InfluxDB's line protocol response
@@ -125,16 +129,7 @@ func (influx InfluxDB) GetLogs(filter LogFilter) ([]LogEntry, error) {
 			}
 		}
 	}
-	sort.Slice(logEntries, func(i, j int) bool {
 
-		if logEntries[i].Timestamp.Before(logEntries[j].Timestamp) {
-			return true
-		}
-		if logEntries[j].Timestamp.Before(logEntries[i].Timestamp) {
-			return false
-		}
-		return logEntries[i].Sequence < logEntries[j].Sequence
-	})
 	return logEntries, nil
 }
 
@@ -148,7 +143,7 @@ func (influx InfluxDB) query(query influxdbClient.Query) (*influxdbClient.Respon
 	queryURL.Path = path.Clean(fmt.Sprintf("%s/proxy/%s", queryURL.Path, INFLUXDB))
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "error creating request for log proxy")
 	}
 
 	parametersBytes, err := json.Marshal(query.Parameters)

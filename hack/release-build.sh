@@ -162,7 +162,7 @@ build_env_builder_image() {
     else
         # variant specified - append variant to image name and assume dockerfile
         # exists with same suffix (e.g. image node-env-debian built from Dockerfile-debian)
-        imgname="$imgname-$imgvariant"
+        imgname="$imgnamebase-$imgvariant"
         dockerfile="Dockerfile-$imgvariant"
     fi
     echo "Building $envdir -> $imgname:$version using $dockerfile"
@@ -198,8 +198,8 @@ build_charts() {
     do
     # https://github.com/kubernetes/helm/issues/1732
     helm init --client-only
-	helm package -u $c/
-	mv *.tgz $BUILDDIR/charts/
+	  helm package -u $c/
+	  mv *.tgz $BUILDDIR/charts/
     done
     popd
 }
@@ -223,9 +223,11 @@ build_yamls() {
         popd
 
         # for minikube and other environments that don't support LoadBalancer
-        helm template ${c} -n ${releaseName} --set analytics=false,analyticsNonHelmInstall=true,serviceType=NodePort,routerServiceType=NodePort > ${c}-${version}-minikube.yaml
+        helm template ${c} -n ${releaseName} --namespace fission --set analytics=false,analyticsNonHelmInstall=true,serviceType=NodePort,routerServiceType=NodePort > ${c}-${version}-minikube.yaml
         # for environments that support LoadBalancer
-        helm template ${c} -n ${releaseName} --set analytics=false,analyticsNonHelmInstall=true > ${c}-${version}.yaml
+        helm template ${c} -n ${releaseName} --namespace fission --set analytics=false,analyticsNonHelmInstall=true > ${c}-${version}.yaml
+        # for OpenShift
+        helm template ${c} -n ${releaseName} --namespace fission --set analytics=false,analyticsNonHelmInstall=true,logger.enableSecurityContext=true,prometheus.enabled=false > ${c}-${version}-openshift.yaml
 
         # copy yaml files to build directory
         mv *.yaml ${BUILDDIR}/yamls/
@@ -266,12 +268,27 @@ build_all() {
     fi
     
     mkdir -p $BUILDDIR
-    
+
+    # generate swagger (OpenApi 2.0) doc before building bundle image
+    generate_swagger_doc
+
     build_fission_bundle_image $version $date $gitcommit
     build_fetcher_image $version $date $gitcommit
     build_builder_image $version $date $gitcommit
     build_all_cli $version $date $gitcommit
     build_pre_upgrade_checks_image $version $date $gitcommit
+
+    remove_generated_swagger_doc
+}
+
+generate_swagger_doc() {
+  pushd $DIR/pkg/apis/fission.io/v1/tool
+  ./update-generated-swagger-docs.sh
+  popd
+}
+
+remove_generated_swagger_doc() {
+  rm $DIR/pkg/apis/fission.io/v1/types_swagger_doc_generated.go
 }
 
 version=${VERSION}

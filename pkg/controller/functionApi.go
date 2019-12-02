@@ -18,28 +18,97 @@ package controller
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sort"
+	"strconv"
+	"strings"
 
+	"github.com/emicklei/go-restful"
+	restfulspec "github.com/emicklei/go-restful-openapi"
+	"github.com/go-openapi/spec"
 	"github.com/gorilla/mux"
+	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	restclient "k8s.io/client-go/rest"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/kubernetes"
 
 	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
 	ferror "github.com/fission/fission/pkg/error"
+	"github.com/fission/fission/pkg/types"
 )
 
-func (a *API) getIstioServiceLabels(fnName string) map[string]string {
-	return map[string]string{
-		"functionName": fnName,
-	}
+func RegisterFunctionRoute(ws *restful.WebService) {
+	tags := []string{"Function"}
+	specTag = append(specTag, spec.Tag{TagProps: spec.TagProps{Name: "Function", Description: "Function Operation"}})
+
+	ws.Route(
+		ws.GET("/v2/functions").
+			Doc("List all functions").
+			Metadata(restfulspec.KeyOpenAPITags, tags).
+			To(func(req *restful.Request, resp *restful.Response) {
+				resp.ResponseWriter.WriteHeader(http.StatusOK)
+			}).
+			Param(ws.QueryParameter("namespace", "Namespace of function").DataType("string").DefaultValue(metav1.NamespaceAll).Required(false)).
+			Produces(restful.MIME_JSON).
+			Writes([]fv1.Function{}).
+			Returns(http.StatusOK, "List of functions", []fv1.Function{}))
+
+	ws.Route(
+		ws.POST("/v2/functions").
+			Doc("Create function").
+			Metadata(restfulspec.KeyOpenAPITags, tags).
+			To(func(req *restful.Request, resp *restful.Response) {
+				resp.ResponseWriter.WriteHeader(http.StatusOK)
+			}).
+			Produces(restful.MIME_JSON).
+			Reads(fv1.Function{}).
+			Writes(metav1.ObjectMeta{}).
+			Returns(http.StatusOK, "Metadata of created function", metav1.ObjectMeta{}))
+
+	ws.Route(
+		ws.GET("/v2/functions/{function}").
+			Doc("Get detail of function").
+			Metadata(restfulspec.KeyOpenAPITags, tags).
+			To(func(req *restful.Request, resp *restful.Response) {
+				resp.ResponseWriter.WriteHeader(http.StatusOK)
+			}).
+			Param(ws.PathParameter("function", "Function name").DataType("string").DefaultValue("").Required(true)).
+			Param(ws.QueryParameter("namespace", "Namespace of function").DataType("string").DefaultValue(metav1.NamespaceAll).Required(false)).
+			Produces(restful.MIME_JSON).
+			Writes(fv1.Function{}). // on the response
+			Returns(http.StatusOK, "A function", fv1.Function{}))
+
+	ws.Route(
+		ws.PUT("/v2/functions/{function}").
+			Doc("Update function").
+			Metadata(restfulspec.KeyOpenAPITags, tags).
+			To(func(req *restful.Request, resp *restful.Response) {
+				resp.ResponseWriter.WriteHeader(http.StatusOK)
+			}).
+			Param(ws.PathParameter("function", "Function name").DataType("string").DefaultValue("").Required(true)).
+			Produces(restful.MIME_JSON).
+			Reads(fv1.Function{}).
+			Writes(metav1.ObjectMeta{}). // on the response
+			Returns(http.StatusOK, "Metadata of updated function", metav1.ObjectMeta{}))
+
+	ws.Route(
+		ws.DELETE("/v2/functions/{function}").
+			Doc("Delete function").
+			Metadata(restfulspec.KeyOpenAPITags, tags).
+			To(func(req *restful.Request, resp *restful.Response) {
+				resp.ResponseWriter.WriteHeader(http.StatusOK)
+			}).
+			Param(ws.PathParameter("function", "Function name").DataType("string").DefaultValue("").Required(true)).
+			Param(ws.QueryParameter("namespace", "Namespace of function").DataType("string").DefaultValue(metav1.NamespaceAll).Required(false)).
+			Produces(restful.MIME_JSON).
+			Returns(http.StatusOK, "Only HTTP status returned", nil))
 }
 
 func (a *API) FunctionApiList(w http.ResponseWriter, r *http.Request) {
@@ -188,9 +257,12 @@ func (a *API) FunctionLogsApiPost(w http.ResponseWriter, r *http.Request) {
 
 	svcUrl, err := url.Parse(dbCnf.httpURL)
 	if err != nil {
-		a.logger.Error("failed parse url to establish proxy to database for function logs",
+		msg := "failed parse url to establish proxy to database for function logs"
+		a.logger.Error(msg,
 			zap.Error(err),
 			zap.String("database_url", dbCnf.httpURL))
+		a.respondWithError(w, errors.Wrap(err, msg))
+		return
 	}
 	// set up proxy server director
 	director := func(req *http.Request) {
@@ -199,6 +271,7 @@ func (a *API) FunctionLogsApiPost(w http.ResponseWriter, r *http.Request) {
 		req.URL.Scheme = svcUrl.Scheme
 		req.URL.Host = svcUrl.Host
 		req.URL.Path = svcUrl.Path
+		req.Host = svcUrl.Host
 		// set up http basic auth for database authentication
 		req.SetBasicAuth(dbCnf.username, dbCnf.password)
 	}
@@ -212,10 +285,18 @@ func (a *API) FunctionLogsApiPost(w http.ResponseWriter, r *http.Request) {
 func (a *API) FunctionPodLogs(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	fnName := vars["function"]
-	ns := vars["namespace"]
+
+	ns := a.extractQueryParamFromRequest(r, "namespace")
+	podNs := "fission-function"
 
 	if len(ns) == 0 {
-		ns = "fission-function"
+		ns = metav1.NamespaceDefault
+	} else if ns != metav1.NamespaceDefault {
+		// If the function namespace is "default", executor
+		// will create function pods under "fission-function".
+		// Otherwise, the function pod will be created under
+		// the same namespace of function.
+		podNs = ns
 	}
 
 	f, err := a.fissionClient.Functions(ns).Get(fnName)
@@ -223,16 +304,16 @@ func (a *API) FunctionPodLogs(w http.ResponseWriter, r *http.Request) {
 		a.respondWithError(w, err)
 		return
 	}
-	envName := f.Spec.Environment.Name
-
-	if err != nil {
-		a.respondWithError(w, err)
-		return
-	}
 
 	// Get function Pods first
-	selector := "functionName=" + fnName
-	podList, err := a.kubernetesClient.CoreV1().Pods(ns).List(metav1.ListOptions{LabelSelector: selector})
+	selector := map[string]string{
+		types.FUNCTION_UID:          string(f.Metadata.UID),
+		types.ENVIRONMENT_NAME:      f.Spec.Environment.Name,
+		types.ENVIRONMENT_NAMESPACE: f.Spec.Environment.Namespace,
+	}
+	podList, err := a.kubernetesClient.CoreV1().Pods(podNs).List(metav1.ListOptions{
+		LabelSelector: labels.Set(selector).AsSelector().String(),
+	})
 	if err != nil {
 		a.respondWithError(w, err)
 		return
@@ -241,31 +322,47 @@ func (a *API) FunctionPodLogs(w http.ResponseWriter, r *http.Request) {
 	// Get the logs for last Pod executed
 	pods := podList.Items
 	sort.Slice(pods, func(i, j int) bool {
-		itime := pods[i].ObjectMeta.CreationTimestamp.Time
-		jtime := pods[j].ObjectMeta.CreationTimestamp.Time
-		return itime.After(jtime)
+		rv1, _ := strconv.ParseInt(pods[i].ObjectMeta.ResourceVersion, 10, 32)
+		rv2, _ := strconv.ParseInt(pods[j].ObjectMeta.ResourceVersion, 10, 32)
+		return rv1 > rv2
 	})
 
-	podLogOpts := apiv1.PodLogOptions{Container: envName} // Only the env container, not fetcher
-	var podLogsReq *restclient.Request
-	if len(pods) > 0 {
-		podLogsReq = a.kubernetesClient.CoreV1().Pods(ns).GetLogs(pods[0].ObjectMeta.Name, &podLogOpts)
-	} else {
-		a.respondWithError(w, errors.New("No active pods found"))
+	if len(pods) <= 0 {
+		a.respondWithError(w, errors.New("no active pods found"))
 		return
 	}
 
-	podLogs, err := podLogsReq.Stream()
+	// get the pod with highest resource version
+	err = getContainerLog(a.kubernetesClient, w, f, &pods[0])
 	if err != nil {
-		a.respondWithError(w, err)
+		a.respondWithError(w, errors.Wrapf(err, "error getting container logs"))
 		return
 	}
-	defer podLogs.Close()
+}
 
-	_, err = io.Copy(w, podLogs)
-	if err != nil {
-		a.respondWithError(w, err)
-		return
+func getContainerLog(kubernetesClient *kubernetes.Clientset, w http.ResponseWriter, fn *fv1.Function, pod *apiv1.Pod) error {
+	seq := strings.Repeat("=", 35)
+
+	for _, container := range pod.Spec.Containers {
+		podLogOpts := apiv1.PodLogOptions{Container: container.Name} // Only the env container, not fetcher
+		podLogsReq := kubernetesClient.CoreV1().Pods(pod.Namespace).GetLogs(pod.ObjectMeta.Name, &podLogOpts)
+
+		podLogs, err := podLogsReq.Stream()
+		if err != nil {
+			return errors.Wrapf(err, "error streaming pod log")
+		}
+
+		msg := fmt.Sprintf("\n%v\nFunction: %v\nEnvironment: %v\nNamespace: %v\nPod: %v\nContainer: %v\nNode: %v\n%v\n", seq,
+			fn.Metadata.Name, fn.Spec.Environment.Name, pod.Namespace, pod.Name, container.Name, pod.Spec.NodeName, seq)
+		w.Write([]byte(msg))
+
+		_, err = io.Copy(w, podLogs)
+		if err != nil {
+			return errors.Wrapf(err, "error copying pod log")
+		}
+
+		podLogs.Close()
 	}
-	return
+
+	return nil
 }

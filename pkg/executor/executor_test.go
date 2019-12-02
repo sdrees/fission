@@ -25,10 +25,8 @@ package executor
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/rand"
-	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -99,19 +97,6 @@ func createSvc(kubeClient *kubernetes.Clientset, ns string, name string, targetP
 	return svc
 }
 
-func httpGet(url string) string {
-	resp, err := http.Get(url)
-	if err != nil {
-		log.Panicf("HTTP Get failed: URL %v: %v", url, err)
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Panicf("HTTP Get failed to read body: URL %v: %v", url, err)
-	}
-	return string(body)
-}
-
 func TestExecutor(t *testing.T) {
 	// run in a random namespace so we can have concurrent tests
 	// on a given cluster
@@ -175,7 +160,7 @@ func TestExecutor(t *testing.T) {
 
 	// create poolmgr
 	port := 9999
-	err = StartExecutor(logger, fissionNs, functionNs, "fission-builder", port)
+	err = StartExecutor(logger, functionNs, "fission-builder", port)
 	if err != nil {
 		log.Panicf("failed to start poolmgr: %v", err)
 	}

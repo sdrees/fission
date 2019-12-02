@@ -19,9 +19,18 @@ package main
 import (
 	"os"
 
-	fcli "github.com/fission/fission/pkg/fission-cli"
+	"github.com/fission/fission/cmd/fission-cli/app"
+	"github.com/fission/fission/pkg/fission-cli/console"
 )
 
 func main() {
-	fcli.NewCliApp().Run(os.Args)
+	cmd := app.App()
+	cmd.SilenceErrors = true // use our own error message printer
+
+	err := cmd.Execute()
+	if err != nil {
+		// let program exit with non-zero code when error occurs
+		console.Error(err.Error())
+		os.Exit(1)
+	}
 }

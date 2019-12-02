@@ -17,9 +17,13 @@ limitations under the License.
 package messageQueue
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	sarama "github.com/Shopify/sarama"
@@ -38,6 +42,8 @@ type (
 		routerUrl string
 		brokers   []string
 		version   sarama.KafkaVersion
+		authKeys  map[string][]byte
+		tls       bool
 	}
 )
 
@@ -62,7 +68,24 @@ func makeKafkaMessageQueue(logger *zap.Logger, routerUrl string, mqCfg MessageQu
 		brokers:   strings.Split(mqCfg.Url, ","),
 		version:   kafkaVersion,
 	}
-	logger.Info("created kafka queue", zap.Any("kafka", kafka))
+
+	if tls, _ := strconv.ParseBool(os.Getenv("TLS_ENABLED")); tls {
+		kafka.tls = true
+
+		authKeys := make(map[string][]byte)
+
+		if mqCfg.Secrets == nil {
+			return nil, errors.New("no secrets were loaded")
+		}
+
+		authKeys["caCert"] = mqCfg.Secrets["caCert"]
+		authKeys["userCert"] = mqCfg.Secrets["userCert"]
+		authKeys["userKey"] = mqCfg.Secrets["userKey"]
+		kafka.authKeys = authKeys
+	}
+
+	logger.Info("created kafka queue", zap.Any("kafka brokers", kafka.brokers),
+		zap.Any("kafka version", kafka.version))
 	return kafka, nil
 }
 
@@ -79,11 +102,6 @@ func (kafka Kafka) subscribe(trigger *fv1.MessageQueueTrigger) (messageQueueSubs
 	consumerConfig.Consumer.Return.Errors = true
 	consumerConfig.Group.Return.Notifications = true
 	consumerConfig.Config.Version = kafka.version
-	consumer, err := cluster.NewConsumer(kafka.brokers, string(trigger.Metadata.UID), []string{trigger.Spec.Topic}, consumerConfig)
-	kafka.logger.Info("created a new consumer", zap.Any("consumer", consumer))
-	if err != nil {
-		panic(err)
-	}
 
 	// Create new producer
 	producerConfig := sarama.NewConfig()
@@ -91,10 +109,44 @@ func (kafka Kafka) subscribe(trigger *fv1.MessageQueueTrigger) (messageQueueSubs
 	producerConfig.Producer.Retry.Max = 10
 	producerConfig.Producer.Return.Successes = true
 	producerConfig.Version = kafka.version
-	producer, err := sarama.NewSyncProducer(kafka.brokers, producerConfig)
-	kafka.logger.Info("created a new producer", zap.Any("consumer", producer))
+
+	// Setup TLS for both producer and consumer
+	if kafka.tls {
+		consumerConfig.Net.TLS.Enable = true
+		producerConfig.Net.TLS.Enable = true
+		tlsConfig, err := kafka.getTLSConfig()
+
+		if err != nil {
+			return nil, err
+		}
+
+		producerConfig.Net.TLS.Config = tlsConfig
+		consumerConfig.Net.TLS.Config = tlsConfig
+	}
+
+	consumer, err := cluster.NewConsumer(kafka.brokers, string(trigger.Metadata.UID), []string{trigger.Spec.Topic}, consumerConfig)
+	kafka.logger.Info("created a new consumer", zap.Strings("brokers", kafka.brokers),
+		zap.String("input topic", trigger.Spec.Topic),
+		zap.String("output topic", trigger.Spec.ResponseTopic),
+		zap.String("error topic", trigger.Spec.ErrorTopic),
+		zap.String("trigger name", trigger.Metadata.Name),
+		zap.String("function namespace", trigger.Metadata.Namespace),
+		zap.String("function name", trigger.Spec.FunctionReference.Name))
 	if err != nil {
-		panic(err)
+		return nil, err
+	}
+
+	producer, err := sarama.NewSyncProducer(kafka.brokers, producerConfig)
+	kafka.logger.Info("created a new producer", zap.Strings("brokers", kafka.brokers),
+		zap.String("input topic", trigger.Spec.Topic),
+		zap.String("output topic", trigger.Spec.ResponseTopic),
+		zap.String("error topic", trigger.Spec.ErrorTopic),
+		zap.String("trigger name", trigger.Metadata.Name),
+		zap.String("function namespace", trigger.Metadata.Namespace),
+		zap.String("function name", trigger.Spec.FunctionReference.Name))
+
+	if err != nil {
+		return nil, err
 	}
 
 	// consume errors
@@ -115,20 +167,39 @@ func (kafka Kafka) subscribe(trigger *fv1.MessageQueueTrigger) (messageQueueSubs
 	go func() {
 		for msg := range consumer.Messages() {
 			kafka.logger.Debug("calling message handler", zap.String("message", string(msg.Value[:])))
-			if kafkaMsgHandler(&kafka, producer, trigger, msg) {
-				consumer.MarkOffset(msg, "") // mark message as processed
-			}
+			go kafkaMsgHandler(&kafka, producer, trigger, msg, consumer)
 		}
 	}()
 
 	return consumer, nil
 }
 
+func (kafka Kafka) getTLSConfig() (*tls.Config, error) {
+	tlsConfig := tls.Config{}
+	cert, err := tls.X509KeyPair(kafka.authKeys["userCert"], kafka.authKeys["userKey"])
+	if err != nil {
+		return nil, err
+	}
+
+	tlsConfig.Certificates = []tls.Certificate{cert}
+
+	if err != nil {
+		return nil, err
+	}
+
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(kafka.authKeys["caCert"])
+	tlsConfig.RootCAs = caCertPool
+	tlsConfig.BuildNameToCertificate()
+
+	return &tlsConfig, nil
+}
+
 func (kafka Kafka) unsubscribe(subscription messageQueueSubscription) error {
 	return subscription.(*cluster.Consumer).Close()
 }
 
-func kafkaMsgHandler(kafka *Kafka, producer sarama.SyncProducer, trigger *fv1.MessageQueueTrigger, msg *sarama.ConsumerMessage) bool {
+func kafkaMsgHandler(kafka *Kafka, producer sarama.SyncProducer, trigger *fv1.MessageQueueTrigger, msg *sarama.ConsumerMessage, consumer *cluster.Consumer) {
 	var value string = string(msg.Value[:])
 	// Support other function ref types
 	if trigger.Spec.FunctionReference.Type != types.FunctionReferenceTypeFunctionName {
@@ -154,7 +225,7 @@ func kafkaMsgHandler(kafka *Kafka, producer sarama.SyncProducer, trigger *fv1.Me
 		kafka.logger.Error("failed to create HTTP request to invoke function",
 			zap.Error(err),
 			zap.String("function_url", url))
-		return false
+		return
 	}
 
 	// Set the headers came from Kafka record
@@ -197,7 +268,7 @@ func kafkaMsgHandler(kafka *Kafka, producer sarama.SyncProducer, trigger *fv1.Me
 		kafka.logger.Warn("every function invocation retry failed; final retry gave empty response",
 			zap.String("function_url", url),
 			zap.String("trigger", trigger.Metadata.Name))
-		return false
+		return
 	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
@@ -210,12 +281,12 @@ func kafkaMsgHandler(kafka *Kafka, producer sarama.SyncProducer, trigger *fv1.Me
 	if err != nil {
 		errorHandler(kafka.logger, trigger, producer, url,
 			errors.Wrapf(err, "request body error: %v", string(body)))
-		return false
+		return
 	}
 	if resp.StatusCode != 200 {
 		errorHandler(kafka.logger, trigger, producer, url,
-			errors.Wrapf(err, "request returned failure: %v", resp.StatusCode))
-		return false
+			fmt.Errorf("request returned failure: %v", resp.StatusCode))
+		return
 	}
 	if len(trigger.Spec.ResponseTopic) > 0 {
 		// Generate Kafka record headers
@@ -242,10 +313,10 @@ func kafkaMsgHandler(kafka *Kafka, producer sarama.SyncProducer, trigger *fv1.Me
 				zap.Error(err),
 				zap.String("topic", trigger.Spec.Topic),
 				zap.String("function_url", url))
-			return false
+			return
 		}
 	}
-	return true
+	consumer.MarkOffset(msg, "") // mark message as processed
 }
 
 func errorHandler(logger *zap.Logger, trigger *fv1.MessageQueueTrigger, producer sarama.SyncProducer, funcUrl string, err error) {

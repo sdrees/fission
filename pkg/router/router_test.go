@@ -32,12 +32,12 @@ import (
 
 func TestRouter(t *testing.T) {
 	// metadata for a fake function
-	fn := &metav1.ObjectMeta{Name: "foo", Namespace: metav1.NamespaceDefault}
+	fnMeta := metav1.ObjectMeta{Name: "foo", Namespace: metav1.NamespaceDefault}
 
 	// and a reference to it
 	fr := fv1.FunctionReference{
 		Type: types.FunctionReferenceTypeFunctionName,
-		Name: fn.Name,
+		Name: fnMeta.Name,
 	}
 
 	// start a fake service
@@ -49,14 +49,10 @@ func TestRouter(t *testing.T) {
 
 	// set up the cache with this fake service
 	fmap := makeFunctionServiceMap(logger, 0)
-	fmap.assign(fn, testServiceUrl)
-
-	frmap := makeFunctionRecorderMap(logger, time.Minute)
-
-	trmap := makeTriggerRecorderMap(logger, time.Minute)
+	fmap.assign(&fnMeta, testServiceUrl)
 
 	// HTTP trigger set with a trigger for this function
-	triggers, _, _ := makeHTTPTriggerSet(logger, fmap, frmap, trmap, nil, nil, nil, nil,
+	triggers, _, _ := makeHTTPTriggerSet(logger, fmap, nil, nil, nil, nil,
 		&tsRoundTripperParams{
 			timeout:         50 * time.Millisecond,
 			timeoutExponent: 2,
@@ -85,20 +81,23 @@ func TestRouter(t *testing.T) {
 		triggerResourceVersion: "1234",
 	}
 
-	fnMetaMap := make(map[string]*metav1.ObjectMeta, 1)
-	fnMetaMap[fn.Name] = fn
+	fnMetaMap := make(map[string]*fv1.Function, 1)
+	fnMetaMap[fnMeta.Name] = &fv1.Function{
+		Metadata: fnMeta,
+	}
 
 	rr := resolveResult{
-		resolveResultType:   resolveResultSingleFunction,
-		functionMetadataMap: fnMetaMap,
+		resolveResultType: resolveResultSingleFunction,
+		functionMap:       fnMetaMap,
 	}
 	frr.refCache.Set(nfr, rr)
 
 	// run the router
 	port := 4242
+	tracingSamplingRate := .5
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go serve(ctx, logger, port, triggers, frr)
+	go serve(ctx, logger, port, tracingSamplingRate, triggers, frr, false)
 	time.Sleep(100 * time.Millisecond)
 
 	// hit the router

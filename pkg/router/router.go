@@ -45,6 +45,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -63,18 +64,41 @@ import (
 // request url ---[trigger]---> Function(name, deployment) ----[deployment]----> Function(name, uid) ----[pool mgr]---> k8s service url
 
 func router(ctx context.Context, logger *zap.Logger, httpTriggerSet *HTTPTriggerSet, resolver *functionReferenceResolver) *mutableRouter {
-	mr := NewMutableRouter(logger, mux.NewRouter())
+	var mr *mutableRouter
+
+	// see issue https://github.com/fission/fission/issues/1317
+	useEncodedPath, _ := strconv.ParseBool(os.Getenv("USE_ENCODED_PATH"))
+	if useEncodedPath {
+		mr = NewMutableRouter(logger, mux.NewRouter().UseEncodedPath())
+	} else {
+		mr = NewMutableRouter(logger, mux.NewRouter())
+	}
+
 	httpTriggerSet.subscribeRouter(ctx, mr, resolver)
 	return mr
 }
 
-func serve(ctx context.Context, logger *zap.Logger, port int, httpTriggerSet *HTTPTriggerSet, resolver *functionReferenceResolver) {
+func serve(ctx context.Context, logger *zap.Logger, port int, tracingSamplingRate float64,
+	httpTriggerSet *HTTPTriggerSet, resolver *functionReferenceResolver, displayAccessLog bool) {
 	mr := router(ctx, logger, httpTriggerSet, resolver)
 	url := fmt.Sprintf(":%v", port)
+
 	http.ListenAndServe(url, &ochttp.Handler{
 		Handler: mr,
-		StartOptions: trace.StartOptions{
-			Sampler: trace.AlwaysSample(),
+		GetStartOptions: func(r *http.Request) trace.StartOptions {
+			// do not trace router healthz endpoint
+			if strings.Compare(r.URL.Path, "/router-healthz") == 0 {
+				return trace.StartOptions{
+					Sampler: trace.NeverSample(),
+				}
+			}
+			if displayAccessLog {
+				logger.Info("path", zap.String("path", r.URL.Path),
+					zap.String("method", r.Method), zap.Any("header", r.Header))
+			}
+			return trace.StartOptions{
+				Sampler: trace.ProbabilitySampler(tracingSamplingRate),
+			}
 		},
 	})
 }
@@ -91,10 +115,6 @@ func Start(logger *zap.Logger, port int, executorUrl string) {
 	_ = MakeAnalytics("")
 
 	fmap := makeFunctionServiceMap(logger, time.Minute)
-
-	frmap := makeFunctionRecorderMap(logger, time.Minute)
-
-	trmap := makeTriggerRecorderMap(logger, time.Minute)
 
 	fissionClient, kubeClient, _, err := crd.MakeFissionClient()
 	if err != nil {
@@ -182,7 +202,27 @@ func Start(logger *zap.Logger, port int, executorUrl string) {
 			zap.Duration("default", svcAddrUpdateTimeout))
 	}
 
-	triggers, _, fnStore := makeHTTPTriggerSet(logger.Named("triggerset"), fmap, frmap, trmap, fissionClient, kubeClient, executor, restClient, &tsRoundTripperParams{
+	tracingSamplingRateStr := os.Getenv("TRACING_SAMPLING_RATE")
+	tracingSamplingRate, err := strconv.ParseFloat(tracingSamplingRateStr, 64)
+	if err != nil {
+		tracingSamplingRate = .5
+		logger.Error("failed to parse tracing sampling rate from 'TRACING_SAMPLING_RATE' - set to the default value",
+			zap.Error(err),
+			zap.String("value", tracingSamplingRateStr),
+			zap.Float64("default", tracingSamplingRate))
+	}
+
+	displayAccessLogStr := os.Getenv("DISPLAY_ACCESS_LOG")
+	displayAccessLog, err := strconv.ParseBool(displayAccessLogStr)
+	if err != nil {
+		displayAccessLog = false
+		logger.Error("failed to parse 'DISPLAY_ACCESS_LOG' - set to the default value",
+			zap.Error(err),
+			zap.String("value", displayAccessLogStr),
+			zap.Bool("default", displayAccessLog))
+	}
+
+	triggers, _, fnStore := makeHTTPTriggerSet(logger.Named("triggerset"), fmap, fissionClient, kubeClient, executor, restClient, &tsRoundTripperParams{
 		timeout:           timeout,
 		timeoutExponent:   timeoutExponent,
 		disableKeepAlive:  disableKeepAlive,
@@ -198,5 +238,5 @@ func Start(logger *zap.Logger, port int, executorUrl string) {
 	logger.Info("starting router", zap.Int("port", port))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	serve(ctx, logger, port, triggers, resolver)
+	serve(ctx, logger, port, tracingSamplingRate, triggers, resolver, displayAccessLog)
 }

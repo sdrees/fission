@@ -20,11 +20,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/rest"
 	k8sCache "k8s.io/client-go/tools/cache"
 
 	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
@@ -37,9 +34,7 @@ type (
 	functionReferenceResolver struct {
 		// FunctionReference -> function metadata
 		refCache *cache.Cache
-
-		stopCh chan struct{}
-		store  k8sCache.Store
+		store    k8sCache.Store
 	}
 
 	resolveResultType int
@@ -55,7 +50,7 @@ type (
 	// a distribution of requests across two functions.
 	resolveResult struct {
 		resolveResultType
-		functionMetadataMap        map[string]*metav1.ObjectMeta
+		functionMap                map[string]*fv1.Function
 		functionWtDistributionList []FunctionWeightDistribution
 	}
 
@@ -79,21 +74,6 @@ func makeFunctionReferenceResolver(store k8sCache.Store) *functionReferenceResol
 		store:    store,
 	}
 	return frr
-}
-
-func makeK8SCache(crdClient *rest.RESTClient) (k8sCache.Store, k8sCache.Controller) {
-	watchlist := k8sCache.NewListWatchFromClient(crdClient, "functions", metav1.NamespaceDefault, fields.Everything())
-	listWatch := &k8sCache.ListWatch{
-		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
-			return watchlist.List(options)
-		},
-		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
-			return watchlist.Watch(options)
-		},
-	}
-	resyncPeriod := 30 * time.Second
-	return k8sCache.NewInformer(listWatch, &fv1.Function{}, resyncPeriod,
-		k8sCache.ResourceEventHandlerFuncs{})
 }
 
 // resolve translates a trigger's function reference to a resolveResult.
@@ -128,7 +108,7 @@ func (frr *functionReferenceResolver) resolve(trigger fv1.HTTPTrigger) (*resolve
 		}
 
 	default:
-		return nil, fmt.Errorf("Unrecognized function reference type %v", trigger.Spec.FunctionReference.Type)
+		return nil, errors.Errorf("unrecognized function reference type %v", trigger.Spec.FunctionReference.Type)
 	}
 
 	// cache resolve result
@@ -150,16 +130,17 @@ func (frr *functionReferenceResolver) resolveByName(namespace, name string) (*re
 		return nil, err
 	}
 	if !isExist {
-		return nil, fmt.Errorf("function %v does not exist", name)
+		return nil, errors.Errorf("function %v does not exist", name)
 	}
 
 	f := obj.(*fv1.Function)
-	functionMetadataMap := make(map[string]*metav1.ObjectMeta, 1)
-	functionMetadataMap[f.Metadata.Name] = &f.Metadata
+	functionMap := map[string]*fv1.Function{
+		f.Metadata.Name: f,
+	}
 
 	rr := resolveResult{
-		resolveResultType:   resolveResultSingleFunction,
-		functionMetadataMap: functionMetadataMap,
+		resolveResultType: resolveResultSingleFunction,
+		functionMap:       functionMap,
 	}
 
 	return &rr, nil
@@ -167,7 +148,7 @@ func (frr *functionReferenceResolver) resolveByName(namespace, name string) (*re
 
 func (frr *functionReferenceResolver) resolveByFunctionWeights(namespace string, fr *fv1.FunctionReference) (*resolveResult, error) {
 
-	functionMetadataMap := make(map[string]*metav1.ObjectMeta, 0)
+	functionMap := make(map[string]*fv1.Function)
 	fnWtDistrList := make([]FunctionWeightDistribution, 0)
 	sumPrefix := 0
 
@@ -187,19 +168,18 @@ func (frr *functionReferenceResolver) resolveByFunctionWeights(namespace string,
 		}
 
 		f := obj.(*fv1.Function)
-		functionMetadataMap[f.Metadata.Name] = &f.Metadata
+		functionMap[f.Metadata.Name] = f
 		sumPrefix = sumPrefix + functionWeight
 		fnWtDistrList = append(fnWtDistrList, FunctionWeightDistribution{
 			name:      functionName,
 			weight:    functionWeight,
 			sumPrefix: sumPrefix,
 		})
-
 	}
 
 	rr := resolveResult{
 		resolveResultType:          resolveResultMultipleFunctions,
-		functionMetadataMap:        functionMetadataMap,
+		functionMap:                functionMap,
 		functionWtDistributionList: fnWtDistrList,
 	}
 

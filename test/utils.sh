@@ -44,9 +44,29 @@ clean_resource_by_id() {
 }
 
 test_fn() {
+    if [ -z $FISSION_ROUTER ]; then
+        log "Environment FISSION_ROUTER not set"
+        exit 1
+    fi
+    url="http://$FISSION_ROUTER/$1"
+    expect=$2
+    test_response $url $expect
+}
+export -f test_fn
+
+test_ingress() {
+    url="http://$INGRESS_CONTROLLER/$1"
+    expect=$2
+
+    echo $url
+    test_response $url $expect
+}
+export -f test_ingress
+
+test_response() {
     # Doing an HTTP GET on the function's route
     # Checking for valid response
-    url="http://$FISSION_ROUTER/$1"
+    url=$1
     expect=$2
 
     set +e
@@ -69,7 +89,7 @@ test_fn() {
     done
     set -e
 }
-export -f test_fn
+export -f test_response
 
 test_post_route() {
     # Doing an HTTP POST on the function's route
@@ -146,8 +166,8 @@ export FISSION_NATS_STREAMING_URL="http://defaultFissionAuthToken@$(kubectl -n $
 ## To change the environment image setting for CI test, please refer run_all_tests() in test_utils.sh.
 export PYTHON_RUNTIME_IMAGE=${PYTHON_RUNTIME_IMAGE:-fission/python-env}
 export PYTHON_BUILDER_IMAGE=${PYTHON_BUILDER_IMAGE:-fission/python-builder}
-export GO_RUNTIME_IMAGE=${GO_RUNTIME_IMAGE:-fission/go-env}
-export GO_BUILDER_IMAGE=${GO_BUILDER_IMAGE:-fission/go-builder}
+export GO_RUNTIME_IMAGE=${GO_RUNTIME_IMAGE:-fission/go-env-1.12}
+export GO_BUILDER_IMAGE=${GO_BUILDER_IMAGE:-fission/go-builder-1.12}
 export JVM_RUNTIME_IMAGE=${JVM_RUNTIME_IMAGE:-fission/jvm-env}
 export JVM_BUILDER_IMAGE=${JVM_BUILDER_IMAGE:-fission/jvm-builder}
 export NODE_RUNTIME_IMAGE=${NODE_RUNTIME_IMAGE:-fission/node-env}

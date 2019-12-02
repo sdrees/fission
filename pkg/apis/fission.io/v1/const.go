@@ -18,12 +18,12 @@ package v1
 
 const (
 	EXECUTOR_INSTANCEID_LABEL string = "executorInstanceId"
-	POOLMGR_INSTANCEID_LABEL  string = "poolmgrInstanceId"
+	DEFAULT_FUNCTION_TIMEOUT  int    = 60
 )
 
 const (
-	//LastUpdateTimestamp env variable is used for updating configmaps and secrets in pods
-	LastUpdateTimestamp string = "LASTUPDATE_TIMESTAMP"
+	// ResourceVersionCount env variable is used for updating configmaps and secrets in pods
+	ResourceVersionCount string = "RESOURCE_VERSION_COUNT"
 )
 
 const (
@@ -53,8 +53,8 @@ const (
 )
 
 const (
-	ExecutorTypePoolmgr   = "poolmgr"
-	ExecutorTypeNewdeploy = "newdeploy"
+	ExecutorTypePoolmgr   ExecutorType = "poolmgr"
+	ExecutorTypeNewdeploy ExecutorType = "newdeploy"
 )
 
 const (
@@ -100,4 +100,8 @@ const (
 
 	// set a max number for iterations to prevent infinite processing of canary config
 	MaxIterationsForCanaryConfig = 10
+)
+
+const (
+	DefaultSpecializationTimeOut = 120
 )

@@ -17,28 +17,31 @@ limitations under the License.
 package client
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
+	"github.com/fission/fission/pkg/generator/encoder"
+	v1generator "github.com/fission/fission/pkg/generator/v1"
 )
 
-func (c *Client) EnvironmentCreate(env *fv1.Environment) (*metav1.ObjectMeta, error) {
-	err := env.Validate()
+func getEnvEncodingPayload(env *fv1.Environment) ([]byte, error) {
+	generator, err := v1generator.CreateEnvironmentGeneratorFromObj(env)
 	if err != nil {
-		return nil, fv1.AggregateValidationErrors("Environment", err)
+		return nil, err
 	}
+	return generator.StructuredGenerate(encoder.DefaultJSONEncoder())
+}
 
-	reqbody, err := json.Marshal(env)
+func (c *Client) EnvironmentCreate(env *fv1.Environment) (*metav1.ObjectMeta, error) {
+	data, err := getEnvEncodingPayload(env)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := http.Post(c.url("environments"), "application/json", bytes.NewReader(reqbody))
+	resp, err := c.create("environments", "application/json", data)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +65,7 @@ func (c *Client) EnvironmentGet(m *metav1.ObjectMeta) (*fv1.Environment, error) 
 	relativeUrl := fmt.Sprintf("environments/%v", m.Name)
 	relativeUrl += fmt.Sprintf("?namespace=%v", m.Namespace)
 
-	resp, err := http.Get(c.url(relativeUrl))
+	resp, err := c.get(relativeUrl)
 	if err != nil {
 		return nil, err
 	}
@@ -83,18 +86,14 @@ func (c *Client) EnvironmentGet(m *metav1.ObjectMeta) (*fv1.Environment, error) 
 }
 
 func (c *Client) EnvironmentUpdate(env *fv1.Environment) (*metav1.ObjectMeta, error) {
-	err := env.Validate()
-	if err != nil {
-		return nil, fv1.AggregateValidationErrors("Environment", err)
-	}
-
-	reqbody, err := json.Marshal(env)
+	data, err := getEnvEncodingPayload(env)
 	if err != nil {
 		return nil, err
 	}
+
 	relativeUrl := fmt.Sprintf("environments/%v", env.Metadata.Name)
 
-	resp, err := c.put(relativeUrl, "application/json", reqbody)
+	resp, err := c.put(relativeUrl, "application/json", data)
 	if err != nil {
 		return nil, err
 	}
@@ -116,13 +115,12 @@ func (c *Client) EnvironmentUpdate(env *fv1.Environment) (*metav1.ObjectMeta, er
 func (c *Client) EnvironmentDelete(m *metav1.ObjectMeta) error {
 	relativeUrl := fmt.Sprintf("environments/%v", m.Name)
 	relativeUrl += fmt.Sprintf("?namespace=%v", m.Namespace)
-
 	return c.delete(relativeUrl)
 }
 
 func (c *Client) EnvironmentList(ns string) ([]fv1.Environment, error) {
 	relativeUrl := fmt.Sprintf("environments?namespace=%v", ns)
-	resp, err := http.Get(c.url(relativeUrl))
+	resp, err := c.get(relativeUrl)
 	if err != nil {
 		return nil, err
 	}

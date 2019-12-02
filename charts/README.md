@@ -5,7 +5,7 @@
 
 ## Prerequisites
 
-- Kubernetes 1.6 or later
+- Kubernetes 1.9 or later
 
 
 ## Helm charts
@@ -43,10 +43,10 @@ Parameter | Description | Default
 `routerServiceType` | Type of Fission Router service to use. For minikube, set this to NodePort, elsewhere use LoadBalancer or ClusterIP. | `LoadBalancer`
 `repository` | Image base repository | `index.docker.io`
 `image` | Fission image repository | `fission/fission-bundle`
-`imageTag` | Fission image tag | `1.4.1`
+`imageTag` | Fission image tag | `1.7.0-rc.2`
 `pullPolicy` | Image pull policy | `IfNotPresent`
 `fetcherImage` | Fission fetcher repository | `fission/fetcher`
-`fetcherImageTag` | Fission fetcher image tag | `1.4.1`
+`fetcherImageTag` | Fission fetcher image tag | `1.7.0-rc.2`
 `controllerPort` | Fission Controller service port | `31313`
 `routerPort` | Fission Router service port | ` 31314`
 `functionNamespace` | Namespace in which to run fission functions (this is different from the release namespace) | `fission-function`
@@ -62,11 +62,17 @@ Parameter | Description | Default
 `pruneInterval` | The frequency of archive pruner (in minutes) | `60`
 `preUpgradeChecksImage` | Fission pre-install/pre-upgrade checks live in this image | `fission/pre-upgrade-checks`
 `debugEnv` | If there are any pod specialization errors when a function is triggered and this flag is set to true, the error summary is returned as part of http response | `true`
-`prometheusDeploy` | Set to true if prometheus needs to be deployed along with fission | `true` in `fission-all`, `false` in `fission-core`
+`prometheus.enabled` | Set to true if prometheus needs to be deployed along with fission | `true` in `fission-all`, `false` in `fission-core`
+`prometheus.serviceEndpoint` | If prometheus.enabled is false, please assign the prometheus service URL that is accessible by components. | `nil`
 `canaryDeployment.enabled` | Set to true if you need canary deployment feature | `true` in `fission-all`, `false` in `fission-core`
-`extraCoreComponmentPodConfig` | Extend the container specs for the core fission pods. Can be used to add things like affinty/tolerations/nodeSelectors/etc. | None
+`extraCoreComponentPodConfig` | Extend the container specs for the core fission pods. Can be used to add things like affinty/tolerations/nodeSelectors/etc. | None
+`executor.adoptExistingResources` | If true, executor will try to adopt existing resources created by the old executor instance. | `false`
+`router.deployAsDaemonSet` | Deploy router as DaemonSet instead of Deployment | `false`
 `router.svcAddressMaxRetries` | Max retries times for router to retry on a certain service URL returns from cache/executor | `5`
 `router.svcAddressUpdateTimeout` | The length of update lock expiry time for router to get a service URL returns from executor | `30`
+`router.svcAnnotations` | Annotations for router service | None
+`router.useEncodedPath` | For router to match encoded path. If true, "/foo%2Fbar" will match the path "/{var}"; Otherwise, it will match the path "/foo/bar". | `false`
+`router.traceSamplingRate` | Uniformly sample traces with the given probabilistic sampling rate | `0.5`
 `router.roundTrip.disableKeepAlive` | Disable transport keep-alive for fast switching function version | `true`
 `router.roundTrip.keepAliveTime` | The keep-alive period for an active network connection to function pod | `30s`
 `router.roundTrip.timeout` | HTTP transport request timeout | `50ms`
