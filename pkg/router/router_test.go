@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fission/fission/pkg/types"
 	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -36,7 +35,7 @@ func TestRouter(t *testing.T) {
 
 	// and a reference to it
 	fr := fv1.FunctionReference{
-		Type: types.FunctionReferenceTypeFunctionName,
+		Type: fv1.FunctionReferenceTypeFunctionName,
 		Name: fnMeta.Name,
 	}
 
@@ -61,7 +60,7 @@ func TestRouter(t *testing.T) {
 	triggerUrl := "/foo"
 	triggers.triggers = append(triggers.triggers,
 		fv1.HTTPTrigger{
-			Metadata: metav1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:            "xxx",
 				Namespace:       metav1.NamespaceDefault,
 				ResourceVersion: "1234",
@@ -83,7 +82,7 @@ func TestRouter(t *testing.T) {
 
 	fnMetaMap := make(map[string]*fv1.Function, 1)
 	fnMetaMap[fnMeta.Name] = &fv1.Function{
-		Metadata: fnMeta,
+		ObjectMeta: fnMeta,
 	}
 
 	rr := resolveResult{

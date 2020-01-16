@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -15,7 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
-	"github.com/fission/fission/pkg/types"
+	"github.com/fission/fission/pkg/fetcher"
 	"github.com/fission/fission/pkg/utils"
 )
 
@@ -31,46 +32,36 @@ type Config struct {
 	sharedSecretPath string
 	sharedCfgMapPath string
 
-	// dockerRegistryAuthDomain string
-	// dockerRegistryUsername   string
-	// dockerRegistryPassword   string
-
 	serviceAccount string
 
 	jaegerCollectorEndpoint string
 }
 
 func getFetcherResources() (apiv1.ResourceRequirements, error) {
-	mincpu, err := resource.ParseQuantity(os.Getenv("FETCHER_MINCPU"))
-	if err != nil {
-		return apiv1.ResourceRequirements{}, err
+	resourceReqs := apiv1.ResourceRequirements{
+		Requests: map[apiv1.ResourceName]resource.Quantity{},
+		Limits:   map[apiv1.ResourceName]resource.Quantity{},
 	}
+	errs := utils.MultiErrorWithFormat()
+	errs = multierror.Append(errs,
+		parseResources("FETCHER_MINCPU", resourceReqs.Requests, apiv1.ResourceCPU),
+		parseResources("FETCHER_MINMEM", resourceReqs.Requests, apiv1.ResourceMemory),
+		parseResources("FETCHER_MAXCPU", resourceReqs.Limits, apiv1.ResourceCPU),
+		parseResources("FETCHER_MAXMEM", resourceReqs.Limits, apiv1.ResourceMemory),
+	)
+	return resourceReqs, errs.ErrorOrNil()
+}
 
-	minmem, err := resource.ParseQuantity(os.Getenv("FETCHER_MINMEM"))
-	if err != nil {
-		return apiv1.ResourceRequirements{}, err
+func parseResources(env string, resourceReqs map[apiv1.ResourceName]resource.Quantity, resName apiv1.ResourceName) error {
+	val := os.Getenv(env)
+	if len(val) > 0 {
+		quantity, err := resource.ParseQuantity(val)
+		if err != nil {
+			return err
+		}
+		resourceReqs[resName] = quantity
 	}
-
-	maxcpu, err := resource.ParseQuantity(os.Getenv("FETCHER_MAXCPU"))
-	if err != nil {
-		return apiv1.ResourceRequirements{}, err
-	}
-
-	maxmem, err := resource.ParseQuantity(os.Getenv("FETCHER_MAXMEM"))
-	if err != nil {
-		return apiv1.ResourceRequirements{}, err
-	}
-
-	return apiv1.ResourceRequirements{
-		Requests: map[apiv1.ResourceName]resource.Quantity{
-			apiv1.ResourceCPU:    mincpu,
-			apiv1.ResourceMemory: minmem,
-		},
-		Limits: map[apiv1.ResourceName]resource.Quantity{
-			apiv1.ResourceCPU:    maxcpu,
-			apiv1.ResourceMemory: maxmem,
-		},
-	}, nil
+	return nil
 }
 
 func MakeFetcherConfig(sharedMountPath string) (*Config, error) {
@@ -97,14 +88,14 @@ func MakeFetcherConfig(sharedMountPath string) (*Config, error) {
 		sharedSecretPath:        "/secrets",
 		sharedCfgMapPath:        "/configs",
 		jaegerCollectorEndpoint: os.Getenv("TRACE_JAEGER_COLLECTOR_ENDPOINT"),
-		serviceAccount:          types.FissionFetcherSA,
+		serviceAccount:          fv1.FissionFetcherSA,
 	}, nil
 }
 
 func (cfg *Config) SetupServiceAccount(kubernetesClient *kubernetes.Clientset, namespace string, context interface{}) error {
-	_, err := utils.SetupSA(kubernetesClient, types.FissionFetcherSA, namespace)
+	_, err := utils.SetupSA(kubernetesClient, fv1.FissionFetcherSA, namespace)
 	if err != nil {
-		log.Printf("Error : %v creating %s in ns : %s for: %#v", err, types.FissionFetcherSA, namespace, context)
+		log.Printf("Error : %v creating %s in ns : %s for: %#v", err, fv1.FissionFetcherSA, namespace, context)
 		return err
 	}
 
@@ -115,18 +106,18 @@ func (cfg *Config) SharedMountPath() string {
 	return cfg.sharedMountPath
 }
 
-func (cfg *Config) NewSpecializeRequest(fn *fv1.Function, env *fv1.Environment) types.FunctionSpecializeRequest {
+func (cfg *Config) NewSpecializeRequest(fn *fv1.Function, env *fv1.Environment) fetcher.FunctionSpecializeRequest {
 	// for backward compatibility, since most v1 env
 	// still try to load user function from hard coded
 	// path /userfunc/user
 	targetFilename := "user"
 	if env.Spec.Version >= 2 {
-		targetFilename = string(fn.Metadata.UID)
+		targetFilename = string(fn.ObjectMeta.UID)
 	}
 
-	return types.FunctionSpecializeRequest{
-		FetchReq: types.FunctionFetchRequest{
-			FetchType: types.FETCH_DEPLOYMENT,
+	return fetcher.FunctionSpecializeRequest{
+		FetchReq: fetcher.FunctionFetchRequest{
+			FetchType: fv1.FETCH_DEPLOYMENT,
 			Package: metav1.ObjectMeta{
 				Namespace: fn.Spec.Package.PackageRef.Namespace,
 				Name:      fn.Spec.Package.PackageRef.Name,
@@ -136,10 +127,10 @@ func (cfg *Config) NewSpecializeRequest(fn *fv1.Function, env *fv1.Environment) 
 			ConfigMaps:  fn.Spec.ConfigMaps,
 			KeepArchive: env.Spec.KeepArchive,
 		},
-		LoadReq: types.FunctionLoadRequest{
+		LoadReq: fetcher.FunctionLoadRequest{
 			FilePath:         filepath.Join(cfg.sharedMountPath, targetFilename),
 			FunctionName:     fn.Spec.Package.FunctionName,
-			FunctionMetadata: &fn.Metadata,
+			FunctionMetadata: &fn.ObjectMeta,
 			EnvVersion:       env.Spec.Version,
 		},
 	}
@@ -181,19 +172,19 @@ func (cfg *Config) fetcherCommand(extraArgs ...string) []string {
 func (cfg *Config) volumesWithMounts() ([]apiv1.Volume, []apiv1.VolumeMount) {
 	volumes := []apiv1.Volume{
 		{
-			Name: types.SharedVolumeUserfunc,
+			Name: fv1.SharedVolumeUserfunc,
 			VolumeSource: apiv1.VolumeSource{
 				EmptyDir: &apiv1.EmptyDirVolumeSource{},
 			},
 		},
 		{
-			Name: types.SharedVolumeSecrets,
+			Name: fv1.SharedVolumeSecrets,
 			VolumeSource: apiv1.VolumeSource{
 				EmptyDir: &apiv1.EmptyDirVolumeSource{},
 			},
 		},
 		{
-			Name: types.SharedVolumeConfigmaps,
+			Name: fv1.SharedVolumeConfigmaps,
 			VolumeSource: apiv1.VolumeSource{
 				EmptyDir: &apiv1.EmptyDirVolumeSource{},
 			},
@@ -201,15 +192,15 @@ func (cfg *Config) volumesWithMounts() ([]apiv1.Volume, []apiv1.VolumeMount) {
 	}
 	mounts := []apiv1.VolumeMount{
 		{
-			Name:      types.SharedVolumeUserfunc,
+			Name:      fv1.SharedVolumeUserfunc,
 			MountPath: cfg.sharedMountPath,
 		},
 		{
-			Name:      types.SharedVolumeSecrets,
+			Name:      fv1.SharedVolumeSecrets,
 			MountPath: cfg.sharedSecretPath,
 		},
 		{
-			Name:      types.SharedVolumeConfigmaps,
+			Name:      fv1.SharedVolumeConfigmaps,
 			MountPath: cfg.sharedCfgMapPath,
 		},
 	}
@@ -298,7 +289,7 @@ func (cfg *Config) addFetcherToPodSpecWithCommand(podSpec *apiv1.PodSpec, mainCo
 	podSpec.Volumes = append(podSpec.Volumes, volumes...)
 	podSpec.Containers = append(podSpec.Containers, c)
 	if podSpec.ServiceAccountName == "" {
-		podSpec.ServiceAccountName = types.FissionFetcherSA
+		podSpec.ServiceAccountName = fv1.FissionFetcherSA
 	}
 
 	return nil

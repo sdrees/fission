@@ -33,7 +33,6 @@ import (
 	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
 	"github.com/fission/fission/pkg/controller/client"
 	storageSvcClient "github.com/fission/fission/pkg/storagesvc/client"
-	"github.com/fission/fission/pkg/types"
 	"github.com/fission/fission/pkg/utils"
 )
 
@@ -45,7 +44,7 @@ func UploadArchiveFile(ctx context.Context, client client.Interface, fileName st
 		return nil, err
 	}
 
-	if size < types.ArchiveLiteralSizeLimit {
+	if size < fv1.ArchiveLiteralSizeLimit {
 		archive.Type = fv1.ArchiveTypeLiteral
 		archive.Literal, err = GetContents(fileName)
 		if err != nil {
@@ -182,7 +181,7 @@ func PrintPackageSummary(writer io.Writer, pkg *fv1.Package) {
 	// replace escaped line breaker character
 	buildlog := strings.ReplaceAll(pkg.Status.BuildLog, `\n`, "\n")
 	w := tabwriter.NewWriter(writer, 0, 0, 1, ' ', 0)
-	fmt.Fprintf(w, "%v\t%v\n", "Name:", pkg.Metadata.Name)
+	fmt.Fprintf(w, "%v\t%v\n", "Name:", pkg.ObjectMeta.Name)
 	fmt.Fprintf(w, "%v\t%v\n", "Environment:", pkg.Spec.Environment.Name)
 	fmt.Fprintf(w, "%v\t%v\n", "Status:", pkg.Status.BuildStatus)
 	fmt.Fprintf(w, "%v\n%v", "Build Logs:", buildlog)

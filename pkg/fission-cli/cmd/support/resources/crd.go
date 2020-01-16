@@ -24,7 +24,6 @@ import (
 	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
 	"github.com/fission/fission/pkg/controller/client"
 	"github.com/fission/fission/pkg/fission-cli/console"
-	"github.com/fission/fission/pkg/types"
 )
 
 const (
@@ -58,7 +57,7 @@ func (res CrdDumper) Dump(dumpDir string) {
 		}
 
 		for _, item := range items {
-			f := getFileName(dumpDir, item.Metadata)
+			f := getFileName(dumpDir, item.ObjectMeta)
 			writeToFile(f, item)
 		}
 
@@ -70,7 +69,7 @@ func (res CrdDumper) Dump(dumpDir string) {
 		}
 
 		for _, item := range items {
-			f := getFileName(dumpDir, item.Metadata)
+			f := getFileName(dumpDir, item.ObjectMeta)
 			writeToFile(f, item)
 		}
 
@@ -83,7 +82,7 @@ func (res CrdDumper) Dump(dumpDir string) {
 
 		for _, item := range items {
 			item = pkgClean(item)
-			f := getFileName(dumpDir, item.Metadata)
+			f := getFileName(dumpDir, item.ObjectMeta)
 			writeToFile(f, item)
 		}
 
@@ -95,7 +94,7 @@ func (res CrdDumper) Dump(dumpDir string) {
 		}
 
 		for _, item := range items {
-			f := getFileName(dumpDir, item.Metadata)
+			f := getFileName(dumpDir, item.ObjectMeta)
 			writeToFile(f, item)
 		}
 
@@ -107,14 +106,14 @@ func (res CrdDumper) Dump(dumpDir string) {
 		}
 
 		for _, item := range items {
-			f := getFileName(dumpDir, item.Metadata)
+			f := getFileName(dumpDir, item.ObjectMeta)
 			writeToFile(f, item)
 		}
 
 	case CrdMessageQueueTrigger:
 		var triggers []fv1.MessageQueueTrigger
 
-		for _, mqType := range []string{types.MessageQueueTypeNats, types.MessageQueueTypeASQ} {
+		for _, mqType := range []string{fv1.MessageQueueTypeNats, fv1.MessageQueueTypeASQ, fv1.MessageQueueTypeKafka} {
 			l, err := res.client.V1().MessageQueueTrigger().List(mqType, metav1.NamespaceAll)
 			if err != nil {
 				console.Warn(fmt.Sprintf("Error getting %v list: %v", res.crdType, err))
@@ -124,7 +123,7 @@ func (res CrdDumper) Dump(dumpDir string) {
 		}
 
 		for _, item := range triggers {
-			f := getFileName(dumpDir, item.Metadata)
+			f := getFileName(dumpDir, item.ObjectMeta)
 			writeToFile(f, item)
 		}
 
@@ -136,7 +135,7 @@ func (res CrdDumper) Dump(dumpDir string) {
 		}
 
 		for _, item := range items {
-			f := getFileName(dumpDir, item.Metadata)
+			f := getFileName(dumpDir, item.ObjectMeta)
 			writeToFile(f, item)
 		}
 

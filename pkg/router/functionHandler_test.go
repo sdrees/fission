@@ -31,7 +31,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
-	"github.com/fission/fission/pkg/types"
 )
 
 func createBackendService(testResponseString string) *url.URL {
@@ -65,14 +64,14 @@ func TestFunctionProxying(t *testing.T) {
 	fmap.assign(&fnMeta, backendURL)
 
 	httpTrigger := &fv1.HTTPTrigger{
-		Metadata: metav1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:            "xxx",
 			Namespace:       metav1.NamespaceDefault,
 			ResourceVersion: "1234",
 		},
 		Spec: fv1.HTTPTriggerSpec{
 			FunctionReference: fv1.FunctionReference{
-				Type: types.FunctionReferenceTypeFunctionName,
+				Type: fv1.FunctionReferenceTypeFunctionName,
 			},
 		},
 	}
@@ -81,7 +80,7 @@ func TestFunctionProxying(t *testing.T) {
 		logger: logger,
 		fmap:   fmap,
 		function: &fv1.Function{
-			Metadata: metav1.ObjectMeta{Name: "foo", Namespace: metav1.NamespaceDefault},
+			ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: metav1.NamespaceDefault},
 		},
 		tsRoundTripperParams: &tsRoundTripperParams{
 			timeout:         50 * time.Millisecond,
@@ -103,7 +102,7 @@ func TestProxyErrorHandler(t *testing.T) {
 	fh := &functionHandler{
 		logger: logger,
 		function: &fv1.Function{
-			Metadata: metav1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      "dummy",
 				Namespace: "dummy-bar",
 			},

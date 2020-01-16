@@ -26,14 +26,15 @@ import (
 	"github.com/dchest/uniuri"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
 	"github.com/fission/fission/pkg/builder"
 	builderClient "github.com/fission/fission/pkg/builder/client"
 	"github.com/fission/fission/pkg/crd"
 	ferror "github.com/fission/fission/pkg/error"
+	"github.com/fission/fission/pkg/fetcher"
 	fetcherClient "github.com/fission/fission/pkg/fetcher/client"
-	"github.com/fission/fission/pkg/types"
 )
 
 // buildPackage helps to build source package into deployment package.
@@ -44,9 +45,9 @@ import (
 // 4. Return upload response and build logs.
 // *. Return build logs and error if any one of steps above failed.
 func buildPackage(ctx context.Context, logger *zap.Logger, fissionClient *crd.FissionClient, envBuilderNamespace string,
-	storageSvcUrl string, pkg *fv1.Package) (uploadResp *types.ArchiveUploadResponse, buildLogs string, err error) {
+	storageSvcUrl string, pkg *fv1.Package) (uploadResp *fetcher.ArchiveUploadResponse, buildLogs string, err error) {
 
-	env, err := fissionClient.Environments(pkg.Spec.Environment.Namespace).Get(pkg.Spec.Environment.Name)
+	env, err := fissionClient.V1().Environments(pkg.Spec.Environment.Namespace).Get(pkg.Spec.Environment.Name, metav1.GetOptions{})
 	if err != nil {
 		e := "error getting environment CRD info"
 		logger.Error(e, zap.Error(err))
@@ -54,14 +55,14 @@ func buildPackage(ctx context.Context, logger *zap.Logger, fissionClient *crd.Fi
 		return nil, e, ferror.MakeError(http.StatusInternalServerError, e)
 	}
 
-	svcName := fmt.Sprintf("%v-%v.%v", env.Metadata.Name, env.Metadata.ResourceVersion, envBuilderNamespace)
-	srcPkgFilename := fmt.Sprintf("%v-%v", pkg.Metadata.Name, strings.ToLower(uniuri.NewLen(6)))
+	svcName := fmt.Sprintf("%v-%v.%v", env.ObjectMeta.Name, env.ObjectMeta.ResourceVersion, envBuilderNamespace)
+	srcPkgFilename := fmt.Sprintf("%v-%v", pkg.ObjectMeta.Name, strings.ToLower(uniuri.NewLen(6)))
 	fetcherC := fetcherClient.MakeClient(logger, fmt.Sprintf("http://%v:8000", svcName))
 	builderC := builderClient.MakeClient(logger, fmt.Sprintf("http://%v:8001", svcName))
 
-	fetchReq := &types.FunctionFetchRequest{
-		FetchType:   types.FETCH_SOURCE,
-		Package:     pkg.Metadata,
+	fetchReq := &fetcher.FunctionFetchRequest{
+		FetchType:   fv1.FETCH_SOURCE,
+		Package:     pkg.ObjectMeta,
 		Filename:    srcPkgFilename,
 		KeepArchive: false,
 	}
@@ -102,7 +103,7 @@ func buildPackage(ctx context.Context, logger *zap.Logger, fissionClient *crd.Fi
 
 	archivePackage := !env.Spec.KeepArchive
 
-	uploadReq := &types.ArchiveUploadRequest{
+	uploadReq := &fetcher.ArchiveUploadRequest{
 		Filename:       buildResp.ArtifactFilename,
 		StorageSvcUrl:  storageSvcUrl,
 		ArchivePackage: archivePackage,
@@ -122,24 +123,24 @@ func buildPackage(ctx context.Context, logger *zap.Logger, fissionClient *crd.Fi
 
 func updatePackage(logger *zap.Logger, fissionClient *crd.FissionClient,
 	pkg *fv1.Package, status fv1.BuildStatus, buildLogs string,
-	uploadResp *types.ArchiveUploadResponse) (*fv1.Package, error) {
+	uploadResp *fetcher.ArchiveUploadResponse) (*fv1.Package, error) {
 
 	pkg.Status = fv1.PackageStatus{
 		BuildStatus:         status,
 		BuildLog:            buildLogs,
-		LastUpdateTimestamp: time.Now().UTC(),
+		LastUpdateTimestamp: metav1.Time{Time: time.Now().UTC()},
 	}
 
 	if uploadResp != nil {
 		pkg.Spec.Deployment = fv1.Archive{
-			Type:     types.ArchiveTypeUrl,
+			Type:     fv1.ArchiveTypeUrl,
 			URL:      uploadResp.ArchiveDownloadUrl,
 			Checksum: uploadResp.Checksum,
 		}
 	}
 
 	// update package spec
-	pkg, err := fissionClient.Packages(pkg.Metadata.Namespace).Update(pkg)
+	pkg, err := fissionClient.V1().Packages(pkg.ObjectMeta.Namespace).Update(pkg)
 	if err != nil {
 		e := "error updating package"
 		logger.Error(e, zap.Error(err))

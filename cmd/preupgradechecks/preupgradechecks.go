@@ -29,7 +29,6 @@ import (
 
 	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
 	"github.com/fission/fission/pkg/crd"
-	"github.com/fission/fission/pkg/types"
 	"github.com/fission/fission/pkg/utils"
 )
 
@@ -90,7 +89,7 @@ func (client *PreUpgradeTaskClient) VerifyFunctionSpecReferences() {
 	var fList *fv1.FunctionList
 
 	for i := 0; i < maxRetries; i++ {
-		fList, err = client.fissionClient.Functions(metav1.NamespaceAll).List(metav1.ListOptions{})
+		fList, err = client.fissionClient.V1().Functions(metav1.NamespaceAll).List(metav1.ListOptions{})
 		if err == nil {
 			break
 		}
@@ -108,20 +107,20 @@ func (client *PreUpgradeTaskClient) VerifyFunctionSpecReferences() {
 	for _, fn := range fList.Items {
 		secrets := fn.Spec.Secrets
 		for _, secret := range secrets {
-			if secret.Namespace != fn.Metadata.Namespace {
-				errs = multierror.Append(errs, fmt.Errorf("function : %s.%s cannot reference a secret : %s in namespace : %s", fn.Metadata.Name, fn.Metadata.Namespace, secret.Name, secret.Namespace))
+			if secret.Namespace != fn.ObjectMeta.Namespace {
+				errs = multierror.Append(errs, fmt.Errorf("function : %s.%s cannot reference a secret : %s in namespace : %s", fn.ObjectMeta.Name, fn.ObjectMeta.Namespace, secret.Name, secret.Namespace))
 			}
 		}
 
 		configmaps := fn.Spec.ConfigMaps
 		for _, configmap := range configmaps {
-			if configmap.Namespace != fn.Metadata.Namespace {
-				errs = multierror.Append(errs, fmt.Errorf("function : %s.%s cannot reference a configmap : %s in namespace : %s", fn.Metadata.Name, fn.Metadata.Namespace, configmap.Name, configmap.Namespace))
+			if configmap.Namespace != fn.ObjectMeta.Namespace {
+				errs = multierror.Append(errs, fmt.Errorf("function : %s.%s cannot reference a configmap : %s in namespace : %s", fn.ObjectMeta.Name, fn.ObjectMeta.Namespace, configmap.Name, configmap.Namespace))
 			}
 		}
 
-		if fn.Spec.Package.PackageRef.Namespace != fn.Metadata.Namespace {
-			errs = multierror.Append(errs, fmt.Errorf("function : %s.%s cannot reference a package : %s in namespace : %s", fn.Metadata.Name, fn.Metadata.Namespace, fn.Spec.Package.PackageRef.Name, fn.Spec.Package.PackageRef.Namespace))
+		if fn.Spec.Package.PackageRef.Namespace != fn.ObjectMeta.Namespace {
+			errs = multierror.Append(errs, fmt.Errorf("function : %s.%s cannot reference a package : %s in namespace : %s", fn.ObjectMeta.Name, fn.ObjectMeta.Namespace, fn.Spec.Package.PackageRef.Name, fn.Spec.Package.PackageRef.Namespace))
 		}
 	}
 
@@ -168,12 +167,12 @@ func (client *PreUpgradeTaskClient) RemoveClusterAdminRolesForFissionSAs() {
 // This is because, we just deleted the ClusterRoleBindings for these service accounts in the previous function and
 // for the existing functions to work, we need to give these SAs the right privileges
 func (client *PreUpgradeTaskClient) NeedRoleBindings() bool {
-	pkgList, err := client.fissionClient.Packages(metav1.NamespaceDefault).List(metav1.ListOptions{})
+	pkgList, err := client.fissionClient.V1().Packages(metav1.NamespaceDefault).List(metav1.ListOptions{})
 	if err == nil && len(pkgList.Items) > 0 {
 		return true
 	}
 
-	fnList, err := client.fissionClient.Functions(metav1.NamespaceDefault).List(metav1.ListOptions{})
+	fnList, err := client.fissionClient.V1().Functions(metav1.NamespaceDefault).List(metav1.ListOptions{})
 	if err == nil && len(fnList.Items) > 0 {
 		return true
 	}
@@ -190,33 +189,33 @@ func (client *PreUpgradeTaskClient) SetupRoleBindings() {
 
 	// the fact that we're here implies that there had been a prior installation of fission and objects are present still
 	// so, we go ahead and create the role-bindings necessary for the fission-fetcher and fission-builder Service Accounts.
-	err := utils.SetupRoleBinding(client.logger, client.k8sClient, types.PackageGetterRB, metav1.NamespaceDefault, types.PackageGetterCR, types.ClusterRole, types.FissionFetcherSA, client.fnPodNs)
+	err := utils.SetupRoleBinding(client.logger, client.k8sClient, fv1.PackageGetterRB, metav1.NamespaceDefault, fv1.PackageGetterCR, fv1.ClusterRole, fv1.FissionFetcherSA, client.fnPodNs)
 	if err != nil {
 		client.logger.Fatal("error setting up rolebinding for service account",
 			zap.Error(err),
-			zap.String("role_binding", types.PackageGetterRB),
-			zap.String("service_account", types.FissionFetcherSA),
+			zap.String("role_binding", fv1.PackageGetterRB),
+			zap.String("service_account", fv1.FissionFetcherSA),
 			zap.String("service_account_namespace", client.fnPodNs))
 	}
 
-	err = utils.SetupRoleBinding(client.logger, client.k8sClient, types.PackageGetterRB, metav1.NamespaceDefault, types.PackageGetterCR, types.ClusterRole, types.FissionBuilderSA, client.envBuilderNs)
+	err = utils.SetupRoleBinding(client.logger, client.k8sClient, fv1.PackageGetterRB, metav1.NamespaceDefault, fv1.PackageGetterCR, fv1.ClusterRole, fv1.FissionBuilderSA, client.envBuilderNs)
 	if err != nil {
 		client.logger.Fatal("error setting up rolebinding for service account",
 			zap.Error(err),
-			zap.String("role_binding", types.PackageGetterRB),
-			zap.String("service_account", types.FissionBuilderSA),
+			zap.String("role_binding", fv1.PackageGetterRB),
+			zap.String("service_account", fv1.FissionBuilderSA),
 			zap.String("service_account_namespace", client.envBuilderNs))
 	}
 
-	err = utils.SetupRoleBinding(client.logger, client.k8sClient, types.SecretConfigMapGetterRB, metav1.NamespaceDefault, types.SecretConfigMapGetterCR, types.ClusterRole, types.FissionFetcherSA, client.fnPodNs)
+	err = utils.SetupRoleBinding(client.logger, client.k8sClient, fv1.SecretConfigMapGetterRB, metav1.NamespaceDefault, fv1.SecretConfigMapGetterCR, fv1.ClusterRole, fv1.FissionFetcherSA, client.fnPodNs)
 	if err != nil {
 		client.logger.Fatal("error setting up rolebinding for service account",
 			zap.Error(err),
-			zap.String("role_binding", types.SecretConfigMapGetterRB),
-			zap.String("service_account", types.FissionFetcherSA),
+			zap.String("role_binding", fv1.SecretConfigMapGetterRB),
+			zap.String("service_account", fv1.FissionFetcherSA),
 			zap.String("service_account_namespace", client.fnPodNs))
 	}
 
 	client.logger.Info("created rolebindings in default namespace",
-		zap.Strings("role_bindings", []string{types.PackageGetterRB, types.SecretConfigMapGetterRB}))
+		zap.Strings("role_bindings", []string{fv1.PackageGetterRB, fv1.SecretConfigMapGetterRB}))
 }

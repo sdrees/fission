@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/storage"
-	"github.com/fission/fission/pkg/types"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -114,7 +113,7 @@ func TestNewStorageConnectionMissingAccountName(t *testing.T) {
 	panicIf(err)
 
 	connection, err := newAzureStorageConnection(logger, DummyRouterURL, MessageQueueConfig{
-		MQType: types.MessageQueueTypeASQ,
+		MQType: fv1.MessageQueueTypeASQ,
 		Url:    "",
 	})
 	require.Nil(t, connection)
@@ -127,7 +126,7 @@ func TestNewStorageConnectionMissingAccessKey(t *testing.T) {
 
 	_ = os.Setenv("AZURE_STORAGE_ACCOUNT_NAME", "accountname")
 	connection, err := newAzureStorageConnection(logger, DummyRouterURL, MessageQueueConfig{
-		MQType: types.MessageQueueTypeASQ,
+		MQType: fv1.MessageQueueTypeASQ,
 		Url:    "",
 	})
 	_ = os.Unsetenv("AZURE_STORAGE_ACCOUNT_NAME")
@@ -303,16 +302,16 @@ func TestAzureStorageQueuePoisonMessage(t *testing.T) {
 		httpClient: httpClient,
 	}
 	subscription, err := connection.subscribe(&fv1.MessageQueueTrigger{
-		Metadata: metav1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      TriggerName,
 			Namespace: metav1.NamespaceDefault,
 		},
 		Spec: fv1.MessageQueueTriggerSpec{
 			FunctionReference: fv1.FunctionReference{
-				Type: types.FunctionReferenceTypeFunctionName,
+				Type: fv1.FunctionReferenceTypeFunctionName,
 				Name: FunctionName,
 			},
-			MessageQueueType: types.MessageQueueTypeASQ,
+			MessageQueueType: fv1.MessageQueueTypeASQ,
 			Topic:            QueueName,
 			ContentType:      ContentType,
 		},
@@ -451,16 +450,16 @@ func runAzureStorageQueueTest(t *testing.T, count int, output bool) {
 		httpClient: httpClient,
 	}
 	subscription, err := connection.subscribe(&fv1.MessageQueueTrigger{
-		Metadata: metav1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      TriggerName,
 			Namespace: metav1.NamespaceDefault,
 		},
 		Spec: fv1.MessageQueueTriggerSpec{
 			FunctionReference: fv1.FunctionReference{
-				Type: types.FunctionReferenceTypeFunctionName,
+				Type: fv1.FunctionReferenceTypeFunctionName,
 				Name: FunctionName,
 			},
-			MessageQueueType: types.MessageQueueTypeASQ,
+			MessageQueueType: fv1.MessageQueueTypeASQ,
 			Topic:            QueueName,
 			ResponseTopic:    responseTopic,
 			ContentType:      ContentType,

@@ -30,7 +30,6 @@ import (
 	"github.com/fission/fission/pkg/fission-cli/console"
 	flagkey "github.com/fission/fission/pkg/fission-cli/flag/key"
 	"github.com/fission/fission/pkg/fission-cli/util"
-	"github.com/fission/fission/pkg/types"
 )
 
 type CreateSubCommand struct {
@@ -62,13 +61,13 @@ func (opts *CreateSubCommand) complete(input cli.Input) error {
 	var mqType fv1.MessageQueueType
 	switch input.String(flagkey.MqtMQType) {
 	case "":
-		mqType = types.MessageQueueTypeNats
-	case types.MessageQueueTypeNats:
-		mqType = types.MessageQueueTypeNats
-	case types.MessageQueueTypeASQ:
-		mqType = types.MessageQueueTypeASQ
-	case types.MessageQueueTypeKafka:
-		mqType = types.MessageQueueTypeKafka
+		mqType = fv1.MessageQueueTypeNats
+	case fv1.MessageQueueTypeNats:
+		mqType = fv1.MessageQueueTypeNats
+	case fv1.MessageQueueTypeASQ:
+		mqType = fv1.MessageQueueTypeASQ
+	case fv1.MessageQueueTypeKafka:
+		mqType = fv1.MessageQueueTypeKafka
 	default:
 		return errors.New("Unknown message queue type, currently only \"nats-streaming, azure-storage-queue, kafka \" is supported")
 	}
@@ -110,7 +109,7 @@ func (opts *CreateSubCommand) complete(input cli.Input) error {
 		}
 
 		exists, err := fr.ExistsInSpecs(fv1.Function{
-			Metadata: metav1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      fnName,
 				Namespace: fnNamespace,
 			},
@@ -125,13 +124,13 @@ func (opts *CreateSubCommand) complete(input cli.Input) error {
 	}
 
 	opts.trigger = &fv1.MessageQueueTrigger{
-		Metadata: metav1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      mqtName,
 			Namespace: fnNamespace,
 		},
 		Spec: fv1.MessageQueueTriggerSpec{
 			FunctionReference: fv1.FunctionReference{
-				Type: types.FunctionReferenceTypeFunctionName,
+				Type: fv1.FunctionReferenceTypeFunctionName,
 				Name: fnName,
 			},
 			MessageQueueType: mqType,
@@ -149,7 +148,7 @@ func (opts *CreateSubCommand) complete(input cli.Input) error {
 func (opts *CreateSubCommand) run(input cli.Input) error {
 	// if we're writing a spec, don't call the API
 	if input.Bool(flagkey.SpecSave) {
-		specFile := fmt.Sprintf("mqtrigger-%v.yaml", opts.trigger.Metadata.Name)
+		specFile := fmt.Sprintf("mqtrigger-%v.yaml", opts.trigger.ObjectMeta.Name)
 		err := spec.SpecSave(*opts.trigger, specFile)
 		if err != nil {
 			return errors.Wrap(err, "error creating message queue trigger spec")
@@ -162,7 +161,7 @@ func (opts *CreateSubCommand) run(input cli.Input) error {
 		return errors.Wrap(err, "create message queue trigger")
 	}
 
-	fmt.Printf("trigger '%s' created\n", opts.trigger.Metadata.Name)
+	fmt.Printf("trigger '%s' created\n", opts.trigger.ObjectMeta.Name)
 	return nil
 }
 
