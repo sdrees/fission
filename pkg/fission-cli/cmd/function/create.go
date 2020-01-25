@@ -26,7 +26,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
+	fv1 "github.com/fission/fission/pkg/apis/core/v1"
 	ferror "github.com/fission/fission/pkg/error"
 	"github.com/fission/fission/pkg/fission-cli/cliwrapper/cli"
 	"github.com/fission/fission/pkg/fission-cli/cmd"
@@ -301,10 +301,15 @@ func (opts *CreateSubCommand) complete(input cli.Input) error {
 // It also prints warning/error if necessary.
 func (opts *CreateSubCommand) run(input cli.Input) error {
 	// if we're writing a spec, don't create the function
+	// save to spec file or display the spec to console
+	if input.Bool(flagkey.SpecDry) {
+		return spec.SpecDry(*opts.function)
+	}
+
 	if input.Bool(flagkey.SpecSave) {
 		err := spec.SpecSave(*opts.function, opts.specFile)
 		if err != nil {
-			return errors.Wrap(err, "error creating function spec")
+			return errors.Wrap(err, "error saving function spec")
 		}
 		return nil
 	}

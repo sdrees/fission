@@ -22,7 +22,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
+	fv1 "github.com/fission/fission/pkg/apis/core/v1"
 	flagkey "github.com/fission/fission/pkg/fission-cli/flag/key"
 )
 
@@ -170,6 +170,7 @@ var (
 	SpecWait     = Flag{Type: Bool, Name: flagkey.SpecWait, Usage: "Wait for package builds"}
 	SpecWatch    = Flag{Type: Bool, Name: flagkey.SpecWatch, Usage: "Watch local files for change, and re-apply specs as necessary"}
 	SpecDelete   = Flag{Type: Bool, Name: flagkey.SpecDelete, Usage: "Allow apply to delete resources that no longer exist in the specification"}
+	SpecDry      = Flag{Type: Bool, Name: flagkey.SpecDry, Usage: "View the generated specs"}
 
 	SupportOutput = Flag{Type: String, Name: flagkey.SupportOutput, Short: "o", Usage: "Output directory to save dump archive/files", DefaultValue: flagkey.DefaultSpecOutputDir}
 	SupportNoZip  = Flag{Type: Bool, Name: flagkey.SupportNoZip, Usage: "Save dump information into multiple files instead of single zip file"}

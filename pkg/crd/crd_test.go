@@ -22,12 +22,16 @@ import (
 	"testing"
 	"time"
 
+	uuid "github.com/satori/go.uuid"
 	"go.uber.org/zap"
+	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	fv1 "github.com/fission/fission/pkg/apis/fission.io/v1"
-	genv1 "github.com/fission/fission/pkg/apis/genclient/v1/clientset/versioned/typed/fission.io/v1"
+	fv1 "github.com/fission/fission/pkg/apis/core/v1"
+	genInformerCoreV1 "github.com/fission/fission/pkg/apis/genclient/clientset/versioned/typed/core/v1"
 )
+
+var testNS = metav1.NamespaceDefault
 
 func panicIf(err error) {
 	if err != nil {
@@ -35,7 +39,7 @@ func panicIf(err error) {
 	}
 }
 
-func functionTests(crdClient genv1.V1V1Interface) {
+func functionTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	// sample function object
 	function := &fv1.Function{
 		TypeMeta: metav1.TypeMeta{
@@ -44,7 +48,7 @@ func functionTests(crdClient genv1.V1V1Interface) {
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "hello",
-			Namespace: metav1.NamespaceDefault,
+			Namespace: testNS,
 		},
 		Spec: fv1.FunctionSpec{
 			Package: fv1.FunctionPackageRef{
@@ -61,7 +65,7 @@ func functionTests(crdClient genv1.V1V1Interface) {
 	}
 
 	// Test function CRUD
-	fi := crdClient.Functions(metav1.NamespaceDefault)
+	fi := crdClient.Functions(testNS)
 
 	// cleanup from old crashed tests, ignore errors
 	fi.Delete(function.ObjectMeta.Name, nil)
@@ -135,7 +139,7 @@ func functionTests(crdClient genv1.V1V1Interface) {
 
 }
 
-func environmentTests(crdClient genv1.V1V1Interface) {
+func environmentTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	// sample environment object
 	environment := &fv1.Environment{
 		TypeMeta: metav1.TypeMeta{
@@ -144,7 +148,7 @@ func environmentTests(crdClient genv1.V1V1Interface) {
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "hello",
-			Namespace: metav1.NamespaceDefault,
+			Namespace: testNS,
 		},
 		Spec: fv1.EnvironmentSpec{
 			Version: 1,
@@ -159,7 +163,7 @@ func environmentTests(crdClient genv1.V1V1Interface) {
 	}
 
 	// Test environment CRUD
-	ei := crdClient.Environments(metav1.NamespaceDefault)
+	ei := crdClient.Environments(testNS)
 
 	// cleanup from old crashed tests, ignore errors
 	ei.Delete(environment.ObjectMeta.Name, nil)
@@ -229,7 +233,7 @@ func environmentTests(crdClient genv1.V1V1Interface) {
 
 }
 
-func httpTriggerTests(crdClient genv1.V1V1Interface) {
+func httpTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	// sample httpTrigger object
 	httpTrigger := &fv1.HTTPTrigger{
 		TypeMeta: metav1.TypeMeta{
@@ -238,7 +242,7 @@ func httpTriggerTests(crdClient genv1.V1V1Interface) {
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "hello",
-			Namespace: metav1.NamespaceDefault,
+			Namespace: testNS,
 		},
 		Spec: fv1.HTTPTriggerSpec{
 			RelativeURL: "/hi",
@@ -251,7 +255,7 @@ func httpTriggerTests(crdClient genv1.V1V1Interface) {
 	}
 
 	// Test httpTrigger CRUD
-	ei := crdClient.HTTPTriggers(metav1.NamespaceDefault)
+	ei := crdClient.HTTPTriggers(testNS)
 
 	// cleanup from old crashed tests, ignore errors
 	ei.Delete(httpTrigger.ObjectMeta.Name, nil)
@@ -321,7 +325,7 @@ func httpTriggerTests(crdClient genv1.V1V1Interface) {
 
 }
 
-func kubernetesWatchTriggerTests(crdClient genv1.V1V1Interface) {
+func kubernetesWatchTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	// sample kubernetesWatchTrigger object
 	kubernetesWatchTrigger := &fv1.KubernetesWatchTrigger{
 		TypeMeta: metav1.TypeMeta{
@@ -330,7 +334,7 @@ func kubernetesWatchTriggerTests(crdClient genv1.V1V1Interface) {
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "hello",
-			Namespace: metav1.NamespaceDefault,
+			Namespace: testNS,
 		},
 		Spec: fv1.KubernetesWatchTriggerSpec{
 			Namespace: "foo",
@@ -346,7 +350,7 @@ func kubernetesWatchTriggerTests(crdClient genv1.V1V1Interface) {
 	}
 
 	// Test kubernetesWatchTrigger CRUD
-	ei := crdClient.KubernetesWatchTriggers(metav1.NamespaceDefault)
+	ei := crdClient.KubernetesWatchTriggers(testNS)
 
 	// cleanup from old crashed tests, ignore errors
 	ei.Delete(kubernetesWatchTrigger.ObjectMeta.Name, nil)
@@ -427,10 +431,19 @@ func TestCrd(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	panicIf(err)
 
-	fc, _, apiExtClient, err := MakeFissionClient()
+	fc, kubeClient, apiExtClient, err := MakeFissionClient()
 	if err != nil {
 		panicIf(err)
 	}
+
+	// testNS isolation for running multiple CI builds concurrently.
+	testNS = uuid.NewV4().String()
+	kubeClient.CoreV1().Namespaces().Create(&v1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testNS,
+		},
+	})
+	defer kubeClient.CoreV1().Namespaces().Delete(testNS, nil)
 
 	// init our types
 	err = EnsureFissionCRDs(logger, apiExtClient)
@@ -440,8 +453,8 @@ func TestCrd(t *testing.T) {
 	panicIf(err)
 
 	// rest client with knowledge about our crd types
-	functionTests(fc.crdClient.V1V1())
-	environmentTests(fc.crdClient.V1V1())
-	httpTriggerTests(fc.crdClient.V1V1())
-	kubernetesWatchTriggerTests(fc.crdClient.V1V1())
+	functionTests(fc.CoreV1())
+	environmentTests(fc.CoreV1())
+	httpTriggerTests(fc.CoreV1())
+	kubernetesWatchTriggerTests(fc.CoreV1())
 }
