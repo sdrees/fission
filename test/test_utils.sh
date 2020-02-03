@@ -504,8 +504,8 @@ run_all_tests() {
     export PYTHON_BUILDER_IMAGE=gcr.io/$GKE_PROJECT_NAME/python-env-builder:${imageTag}
     export GO_RUNTIME_IMAGE=gcr.io/$GKE_PROJECT_NAME/go-env:${imageTag}
     export GO_BUILDER_IMAGE=gcr.io/$GKE_PROJECT_NAME/go-env-builder:${imageTag}
-    # export JVM_RUNTIME_IMAGE=gcr.io/$GKE_PROJECT_NAME/jvm-env:${imageTag}
-    # export JVM_BUILDER_IMAGE=gcr.io/$GKE_PROJECT_NAME/jvm-env-builder:${imageTag}
+    export JVM_RUNTIME_IMAGE=gcr.io/$GKE_PROJECT_NAME/jvm-env:${imageTag}
+    export JVM_BUILDER_IMAGE=gcr.io/$GKE_PROJECT_NAME/jvm-env-builder:${imageTag}
     export TS_RUNTIME_IMAGE=gcr.io/$GKE_PROJECT_NAME/tensorflow-serving-env:${imageTag}
 
     set +e
@@ -541,7 +541,8 @@ run_all_tests() {
         $ROOT/test/tests/test_environments/test_go_env.sh \
         $ROOT/test/tests/mqtrigger/nats/test_mqtrigger.sh \
         $ROOT/test/tests/mqtrigger/nats/test_mqtrigger_error.sh \
-        $ROOT/test/tests/test_huge_response/test_huge_response.sh
+        $ROOT/test/tests/test_huge_response/test_huge_response.sh \
+        $ROOT/test/tests/test_kubectl/test_kubectl.sh
     FAILURES=$?
 
     export JOBS=3
