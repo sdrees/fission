@@ -24,22 +24,32 @@ import (
 
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func OldHandler(responseWriter http.ResponseWriter, request *http.Request) {
-	responseWriter.Write([]byte("old handler"))
+	_, err := responseWriter.Write([]byte("old handler"))
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 func NewHandler(responseWriter http.ResponseWriter, request *http.Request) {
-	responseWriter.Write([]byte("new handler"))
+	_, err := responseWriter.Write([]byte("new handler"))
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func verifyRequest(expectedResponse string) {
-	targetUrl := "http://localhost:3333"
-	testRequest(targetUrl, expectedResponse)
+	targetURL := "http://localhost:3333"
+	testRequest(targetURL, expectedResponse)
 }
 
 func startServer(mr *mutableRouter) {
-	http.ListenAndServe(":3333", mr)
+	err := http.ListenAndServe(":3333", mr)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func spamServer(quit chan bool) {
@@ -64,10 +74,12 @@ func TestMutableMux(t *testing.T) {
 	log.Print("Create mutable router")
 	muxRouter := mux.NewRouter()
 	muxRouter.HandleFunc("/", OldHandler)
-	logger, err := zap.NewDevelopment()
+	config := zap.NewDevelopmentConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	logger, err := config.Build()
 	panicIf(err)
 
-	mr := NewMutableRouter(logger, muxRouter)
+	mr := newMutableRouter(logger, muxRouter)
 
 	// start http server
 	log.Print("Start http server")

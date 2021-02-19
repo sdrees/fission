@@ -24,7 +24,8 @@ import (
 
 	uuid "github.com/satori/go.uuid"
 	"go.uber.org/zap"
-	"k8s.io/api/core/v1"
+	"go.uber.org/zap/zapcore"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	fv1 "github.com/fission/fission/pkg/apis/core/v1"
@@ -68,7 +69,7 @@ func functionTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	fi := crdClient.Functions(testNS)
 
 	// cleanup from old crashed tests, ignore errors
-	fi.Delete(function.ObjectMeta.Name, nil)
+	fi.Delete(function.ObjectMeta.Name, nil) //nolint: errcheck
 
 	// create
 	f, err := fi.Create(function)
@@ -116,7 +117,10 @@ func functionTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	function.ObjectMeta.ResourceVersion = ""
 	f, err = fi.Create(function)
 	panicIf(err)
-	defer fi.Delete(f.ObjectMeta.Name, nil)
+	defer func() {
+		err := fi.Delete(f.ObjectMeta.Name, nil)
+		panicIf(err)
+	}()
 
 	// assert that we get a watch event for the new function
 	recvd := false
@@ -134,9 +138,7 @@ func functionTests(crdClient genInformerCoreV1.CoreV1Interface) {
 			log.Panicf("Bad object from watch: %#v", wf)
 		}
 		log.Printf("watch event took %v", time.Since(start))
-		recvd = true
 	}
-
 }
 
 func environmentTests(crdClient genInformerCoreV1.CoreV1Interface) {
@@ -166,7 +168,7 @@ func environmentTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	ei := crdClient.Environments(testNS)
 
 	// cleanup from old crashed tests, ignore errors
-	ei.Delete(environment.ObjectMeta.Name, nil)
+	ei.Delete(environment.ObjectMeta.Name, nil) //nolint: errCheck
 
 	// create
 	e, err := ei.Create(environment)
@@ -210,7 +212,10 @@ func environmentTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	environment.ObjectMeta.ResourceVersion = ""
 	e, err = ei.Create(environment)
 	panicIf(err)
-	defer ei.Delete(e.ObjectMeta.Name, nil)
+	defer func() {
+		err := ei.Delete(e.ObjectMeta.Name, nil)
+		panicIf(err)
+	}()
 
 	// assert that we get a watch event for the new environment
 	recvd := false
@@ -228,9 +233,7 @@ func environmentTests(crdClient genInformerCoreV1.CoreV1Interface) {
 			log.Panicf("Bad object from watch: %#v", obj)
 		}
 		log.Printf("watch event took %v", time.Since(start))
-		recvd = true
 	}
-
 }
 
 func httpTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
@@ -258,7 +261,7 @@ func httpTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	ei := crdClient.HTTPTriggers(testNS)
 
 	// cleanup from old crashed tests, ignore errors
-	ei.Delete(httpTrigger.ObjectMeta.Name, nil)
+	ei.Delete(httpTrigger.ObjectMeta.Name, nil) //nolint: errCheck
 
 	// create
 	e, err := ei.Create(httpTrigger)
@@ -302,7 +305,10 @@ func httpTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	httpTrigger.ObjectMeta.ResourceVersion = ""
 	e, err = ei.Create(httpTrigger)
 	panicIf(err)
-	defer ei.Delete(e.ObjectMeta.Name, nil)
+	defer func() {
+		err := ei.Delete(e.ObjectMeta.Name, nil)
+		panicIf(err)
+	}()
 
 	// assert that we get a watch event for the new httpTrigger
 	recvd := false
@@ -320,9 +326,7 @@ func httpTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
 			log.Panicf("Bad object from watch: %#v", obj)
 		}
 		log.Printf("watch event took %v", time.Since(start))
-		recvd = true
 	}
-
 }
 
 func kubernetesWatchTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
@@ -353,7 +357,7 @@ func kubernetesWatchTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	ei := crdClient.KubernetesWatchTriggers(testNS)
 
 	// cleanup from old crashed tests, ignore errors
-	ei.Delete(kubernetesWatchTrigger.ObjectMeta.Name, nil)
+	ei.Delete(kubernetesWatchTrigger.ObjectMeta.Name, nil) //nolint: errCheck
 
 	// create
 	e, err := ei.Create(kubernetesWatchTrigger)
@@ -397,7 +401,10 @@ func kubernetesWatchTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
 	kubernetesWatchTrigger.ObjectMeta.ResourceVersion = ""
 	e, err = ei.Create(kubernetesWatchTrigger)
 	panicIf(err)
-	defer ei.Delete(e.ObjectMeta.Name, nil)
+	defer func() {
+		err := ei.Delete(e.ObjectMeta.Name, nil)
+		panicIf(err)
+	}()
 
 	// assert that we get a watch event for the new kubernetesWatchTrigger
 	recvd := false
@@ -415,9 +422,7 @@ func kubernetesWatchTriggerTests(crdClient genInformerCoreV1.CoreV1Interface) {
 			log.Panicf("Bad object from watch: %#v", obj)
 		}
 		log.Printf("watch event took %v", time.Since(start))
-		recvd = true
 	}
-
 }
 
 func TestCrd(t *testing.T) {
@@ -428,7 +433,10 @@ func TestCrd(t *testing.T) {
 		return
 	}
 
-	logger, err := zap.NewDevelopment()
+	config := zap.NewDevelopmentConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	logger, err := config.Build()
+
 	panicIf(err)
 
 	fc, kubeClient, apiExtClient, err := MakeFissionClient()
@@ -438,12 +446,16 @@ func TestCrd(t *testing.T) {
 
 	// testNS isolation for running multiple CI builds concurrently.
 	testNS = uuid.NewV4().String()
-	kubeClient.CoreV1().Namespaces().Create(&v1.Namespace{
+	_, err = kubeClient.CoreV1().Namespaces().Create(&v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: testNS,
 		},
 	})
-	defer kubeClient.CoreV1().Namespaces().Delete(testNS, nil)
+	panicIf(err)
+	defer func() {
+		err := kubeClient.CoreV1().Namespaces().Delete(testNS, nil)
+		panicIf(err)
+	}()
 
 	// init our types
 	err = EnsureFissionCRDs(logger, apiExtClient)

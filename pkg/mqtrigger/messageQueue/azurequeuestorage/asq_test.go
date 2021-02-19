@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	fv1 "github.com/fission/fission/pkg/apis/core/v1"
@@ -110,7 +111,9 @@ func (m *azureHTTPClientMock) Do(req *http.Request) (*http.Response, error) {
 }
 
 func TestNewStorageConnectionMissingAccountName(t *testing.T) {
-	logger, err := zap.NewDevelopment()
+	config := zap.NewDevelopmentConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	logger, err := config.Build()
 	panicIf(err)
 
 	connection, err := New(logger, messageQueue.Config{
@@ -122,7 +125,9 @@ func TestNewStorageConnectionMissingAccountName(t *testing.T) {
 }
 
 func TestNewStorageConnectionMissingAccessKey(t *testing.T) {
-	logger, err := zap.NewDevelopment()
+	config := zap.NewDevelopmentConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	logger, err := config.Build()
 	panicIf(err)
 
 	_ = os.Setenv("AZURE_STORAGE_ACCOUNT_NAME", "accountname")
@@ -136,7 +141,9 @@ func TestNewStorageConnectionMissingAccessKey(t *testing.T) {
 }
 
 func TestNewStorageConnection(t *testing.T) {
-	logger, err := zap.NewDevelopment()
+	config := zap.NewDevelopmentConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	logger, err := config.Build()
 	panicIf(err)
 
 	_ = os.Setenv("AZURE_STORAGE_ACCOUNT_NAME", "accountname")
@@ -292,7 +299,9 @@ func TestAzureStorageQueuePoisonMessage(t *testing.T) {
 	service.On("GetQueue", QueueName).Return(queue).Once()
 	service.On("GetQueue", QueueName+AzurePoisonQueueSuffix).Return(poisonQueue).Once()
 
-	logger, err := zap.NewDevelopment()
+	config := zap.NewDevelopmentConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	logger, err := config.Build()
 	panicIf(err)
 
 	// Create the storage connection and subscribe to the trigger
@@ -320,7 +329,7 @@ func TestAzureStorageQueuePoisonMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, subscription)
 
-	connection.Unsubscribe(subscription)
+	panicIf(connection.Unsubscribe(subscription))
 
 	mock.AssertExpectationsForObjects(t, httpClient, message, poisonMessage, queue, poisonQueue, service)
 }
@@ -440,7 +449,9 @@ func runAzureStorageQueueTest(t *testing.T, count int, output bool) {
 		service.On("GetQueue", OutputQueueName).Return(outputQueue).Times(count)
 	}
 
-	logger, err := zap.NewDevelopment()
+	config := zap.NewDevelopmentConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	logger, err := config.Build()
 	panicIf(err)
 
 	// Create the storage connection and subscribe to the trigger
@@ -469,7 +480,7 @@ func runAzureStorageQueueTest(t *testing.T, count int, output bool) {
 	require.NoError(t, err)
 	require.NotNil(t, subscription)
 
-	connection.Unsubscribe(subscription)
+	panicIf(connection.Unsubscribe(subscription))
 
 	mock.AssertExpectationsForObjects(t, httpClient, message, outputMessage, queue, outputQueue, service)
 }

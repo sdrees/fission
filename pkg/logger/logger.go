@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -163,11 +164,19 @@ func symlinkReaper(zapLogger *zap.Logger) {
 }
 
 func Start() {
-	zapLogger, err := zap.NewProduction()
+	config := zap.NewProductionConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	zapLogger, err := config.Build()
 	if err != nil {
 		log.Fatalf("can't initialize zap logger: %v", err)
 	}
-	defer zapLogger.Sync()
+
+	defer func() {
+		err := zapLogger.Sync()
+		if err != nil {
+			log.Fatalf("failed to sync zap logger: %v", err)
+		}
+	}()
 
 	if _, err := os.Stat(fissionSymlinkPath); os.IsNotExist(err) {
 		zapLogger.Info("symlink path not exist, create it",

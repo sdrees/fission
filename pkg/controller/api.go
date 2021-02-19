@@ -130,7 +130,7 @@ func (api *API) extractQueryParamFromRequest(r *http.Request, queryParam string)
 // check if namespace exists, if not create it.
 func (api *API) createNsIfNotExists(ns string) error {
 	if ns == metav1.NamespaceDefault {
-		// we dont have to create default ns
+		// we don't have to create default ns
 		return nil
 	}
 
@@ -166,7 +166,10 @@ func (api *API) getLogDBConfig(dbType string) logDBConfig {
 
 func (api *API) HomeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Write([]byte(info.ApiInfo().String()))
+	_, err := w.Write([]byte(info.ApiInfo().String()))
+	if err != nil {
+		api.respondWithError(w, err)
+	}
 }
 
 func (api *API) ApiVersionMismatchHandler(w http.ResponseWriter, r *http.Request) {

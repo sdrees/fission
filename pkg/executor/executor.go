@@ -44,6 +44,7 @@ import (
 )
 
 type (
+	// Executor defines a fission function executor.
 	Executor struct {
 		logger *zap.Logger
 
@@ -55,6 +56,7 @@ type (
 		requestChan chan *createFuncServiceRequest
 		fsCreateWg  map[string]*sync.WaitGroup
 	}
+
 	createFuncServiceRequest struct {
 		function *fv1.Function
 		respChan chan *createFuncServiceResponse
@@ -66,6 +68,7 @@ type (
 	}
 )
 
+// MakeExecutor returns an Executor for given ExecutorType(s).
 func MakeExecutor(logger *zap.Logger, cms *cms.ConfigSecretController,
 	fissionClient *crd.FissionClient, types map[fv1.ExecutorType]executortype.ExecutorType) (*Executor, error) {
 	executor := &Executor{
@@ -98,6 +101,31 @@ func (executor *Executor) serveCreateFuncServices() {
 	for {
 		req := <-executor.requestChan
 		fnMetadata := &req.function.ObjectMeta
+
+		if req.function.Spec.InvokeStrategy.ExecutionStrategy.ExecutorType == fv1.ExecutorTypePoolmgr {
+			go func() {
+				buffer := 10 // add some buffer time for specialization
+				specializationTimeout := req.function.Spec.InvokeStrategy.ExecutionStrategy.SpecializationTimeout
+
+				// set minimum specialization timeout to avoid illegal input and
+				// compatibility problem when applying old spec file that doesn't
+				// have specialization timeout field.
+				if specializationTimeout < fv1.DefaultSpecializationTimeOut {
+					specializationTimeout = fv1.DefaultSpecializationTimeOut
+				}
+
+				fnSpecializationTimeoutContext, cancel := context.WithTimeout(context.Background(),
+					time.Duration(specializationTimeout+buffer)*time.Second)
+				defer cancel()
+
+				fsvc, err := executor.createServiceForFunction(fnSpecializationTimeoutContext, req.function)
+				req.respChan <- &createFuncServiceResponse{
+					funcSvc: fsvc,
+					err:     err,
+				}
+			}()
+			continue
+		}
 
 		// Cache miss -- is this first one to request the func?
 		wg, found := executor.fsCreateWg[crd.CacheKey(fnMetadata)]

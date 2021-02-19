@@ -20,7 +20,7 @@ image: fission/fission-bundle
 pullPolicy: IfNotPresent
 
 ## Fission image version
-imageTag: 1.8.0
+imageTag: 1.12.0
 
 ## Port at which Fission controller service should be exposed
 controllerPort: 31313
@@ -50,8 +50,8 @@ fetcher:
   ## Fetcher repository
   image: fission/fetcher
   ## Fetcher image version
-  imageTag: 1.8.0
-  
+  imageTag: 1.12.0
+
   ## Fetcher is only for to downloading or uploading archive.
   ## Normally, you don't need to change the value here, unless necessary.
   resource:
@@ -68,8 +68,8 @@ logger:
   influxdbAdmin: "admin"
   fluentdImageRepository: index.docker.io
   fluentdImage: fluent/fluent-bit
-  fluentdImageTag: 1.0.4
-  
+  fluentdImageTag: 1.5.1
+
   ## Fluent-bit writes/reads it’s own sqlite database to record a history of tracked
   ## files and a state of offsets, this is very useful to resume a state if the ser-
   ## vice is restarted. For Kubernetes environment with constraints like OpenShift,
@@ -81,7 +81,7 @@ logger:
   ## Only required in some clusters and when enableSecurityContext is true
   podSecurityPolicy:
     enabled: false
-   
+
     ## Configure additional capabilities
     additionalCapabilities:
     # example values for linkerd
@@ -90,27 +90,28 @@ logger:
 
 executor:
   adoptExistingResources: false
+  podReadyTimeout: 300s
 
 ## Router config
 router:
   deployAsDaemonSet: false
   svcAddressMaxRetries: 5
   svcAddressUpdateTimeout: 30s
-  
+  unTapServiceTimeout: 3600s
   ## Display endpoint access logs
   ## To be aware of enabling logging endpoint access log, it increases
   ## router resource utilization when under heavy workloads.
   displayAccessLog: false
-  
+
   ## Add annotations for router
   # svcAnnotations:
   #   cloud.google.com/load-balancer-type: Internal
-  
+
   ## For router to match encoded path.
   ## If true, "/foo%2Fbar" will match the path "/{var}";
   ## Otherwise, it will match the path "/foo/bar".
   useEncodedPath: false
-  
+
   roundTrip:
     ## If true, router will disable the HTTP keep-alive which result in performance degradation.
     ## But it ensures that router can redirect new coming requests to new function pods.
@@ -151,7 +152,7 @@ nats:
 
   # Address of NATS server (domain:port)
   # change from default for external NATS
-  hostaddress: 'nats-streaming:4222'
+  hostaddress: "nats-streaming:4222"
 
   # Authorization token to use with NATS
   authToken: "defaultFissionAuthToken"
@@ -159,30 +160,37 @@ nats:
   # NATS streaming clusterID
   clusterID: "fissionMQTrigger"
 
-  # Client name registered with NATS streaming 
+  # Client name registered with NATS streaming
   clientID: "fission"
 
-  # Queue group registered with NATS streaming 
+  # Queue group registered with NATS streaming
   queueGroup: "fission-messageQueueNatsTrigger"
+
+  # The image to use for NATS streaming server
+  streamingserver:
+    image: nats-streaming
 
 ## Azure-storage-queue: enable and configure the details
 azureStorageQueue:
   enabled: false
   key: ""
   accountName: ""
-  
+
 ## Kafka: enable and configure the details
 kafka:
   enabled: false
-  # note: below link is only for reference. 
-  # Please use the brokers link for your kafka here. 
-  brokers: 'broker.kafka:9092' # or your-bootstrap-server.kafka:9092/9093
+  # note: below link is only for reference.
+  # Please use the brokers link for your kafka here.
+  brokers: "broker.kafka:9092" # or your-bootstrap-server.kafka:9092/9093
   authentication:
     tls:
       enabled: false
-      caCert: '' # path to certificate containing public key of CA authority
-      userCert: '' # path to certificate containing public key of the user signed by CA authority
-      userKey: '' # path to private key of the user
+      # InsecureSkipVerify controls whether a client verifies the server's certificate chain and host name.
+      insecureSkipVerify: false # Warning: Setting this to true, makes TLS susceptible to man-in-the-middle attacks
+      caCert: "" # path to certificate containing public key of CA authority
+      userCert: "" # path to certificate containing public key of the user signed by CA authority
+      userKey: "" # path to private key of the user
+
 
   # brokers: 'my-broker.kafka:9092' # or my-bootstrap-server.kafka:9092/9093
   # Sample config for authentication
@@ -203,10 +211,22 @@ kafka:
 
 ## Persist data to a persistent volume.
 persistence:
-  ## If true, fission will create/use a Persistent Volume Claim
+  ## If true, fission will create/use a Persistent Volume Claim unless storageType is set to s3
   ## If false, use emptyDir
   ##
   enabled: true
+
+  ## Must be set to either local or S3.
+  ## If storateType is set(other than local), one of its backend configuration must be set as below.
+  #storageType: local | s3
+
+  ## Sample configruation for AWS s3 storage backend
+  #s3:
+  # bucketName: <awsBucketName>
+  # subDir: <sub directory within a bucket>
+  # accessKeyId: <awsAccessKeyId>
+  # secretAccessKey: <awsSecretAccessKey>
+  # region: <awsRegion>
 
   ## A manually managed Persistent Volume Claim name
   ## Requires persistence.enabled: true
@@ -225,7 +245,7 @@ persistence:
   accessMode: ReadWriteOnce
   size: 8Gi
 
-## Extend the container specs for the core fission pods. 
+## Extend the container specs for the core fission pods.
 ## Can be used to add things like affinty/tolerations/nodeSelectors/etc.
 ## For example:
 ## extraCoreComponentPodConfig:
@@ -253,6 +273,14 @@ analyticsNonHelmInstall: false
 ## Enable Heapster only in clusters where heapster does not exist already
 heapster: false
 
+## Enable InfluxDB
+influxdb:
+  enabled: true
+  image: influxdb:1.7
+
+# Allow user to override busybox image used in fluent-bit init container
+busyboxImage: busybox
+
 ## Archive pruner is a garbage collector for archives on the fission storage service.
 ## This interval configures the frequency at which it runs inside the storagesvc pod.
 ## The value is in minutes.
@@ -269,7 +297,7 @@ debugEnv: false
 prometheus:
   ## set this flag to true if prometheus needs to be deployed along with fission
   enabled: true
-  
+
   ## If enabled is false, please assign the prometheus service URL
   ## that is accessible by components.
   serviceEndpoint: ""
@@ -281,3 +309,23 @@ canaryDeployment:
 # Use these flags to enable opentracing, the variable is endpoint of Jaeger collector in the format shown below
 #traceCollectorEndpoint: "http://jaeger-collector.jaeger.svc:14268/api/traces?format=jaeger.thrift"
 #traceSamplingRate: 0.75
+
+## Message Queue Trigger Kind, KEDA: enable and configuration
+mqt_keda:
+  enabled: false
+  connector_images:
+    kafka:
+      image: fission/keda-kafka-http-connector
+      tag: v0.5
+    rabbitmq:
+      image: fission/keda-rabbitmq-http-connector
+      tag: v0.5
+    awskinesis:
+      image: fission/keda-awskinesis-http-connector
+      tag: v0.5
+    aws_sqs:
+      image: fission/keda-aws-sqs-http-connector
+      tag: v0.5
+    nats_steaming:
+      image: fission/keda-nats-streaming-http-connector
+      tag: v0.5

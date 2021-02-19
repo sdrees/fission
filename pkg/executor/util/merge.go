@@ -54,6 +54,7 @@ func MergeContainer(dst *apiv1.Container, src *apiv1.Container) (*apiv1.Containe
 	return &dstC, errs.ErrorOrNil()
 }
 
+// MergePodSpec updates srcPodSpec with targetPodSpec fields if not empty
 func MergePodSpec(srcPodSpec *apiv1.PodSpec, targetPodSpec *apiv1.PodSpec) (*apiv1.PodSpec, error) {
 	if targetPodSpec == nil {
 		return srcPodSpec, nil
@@ -104,6 +105,11 @@ func MergePodSpec(srcPodSpec *apiv1.PodSpec, targetPodSpec *apiv1.PodSpec) (*api
 
 	if targetPodSpec.TerminationGracePeriodSeconds != nil {
 		srcPodSpec.TerminationGracePeriodSeconds = targetPodSpec.TerminationGracePeriodSeconds
+	}
+
+	// Possibility to disable kubernetes environment variables for functions/environments (#1599)
+	if targetPodSpec.EnableServiceLinks != nil {
+		srcPodSpec.EnableServiceLinks = targetPodSpec.EnableServiceLinks
 	}
 
 	//TODO - Security context should be merged instead of overriding.

@@ -81,7 +81,12 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, srcpkg *fv1.Package) 
 	if err != nil {
 		return
 	}
-	defer buildCache.Delete(key)
+	defer func() {
+		err := buildCache.Delete(key)
+		if err != nil {
+			pkgw.logger.Error("error deleting key from cache", zap.String("key", key), zap.Error(err))
+		}
+	}()
 
 	pkgw.logger.Info("starting build for package", zap.String("package_name", srcpkg.ObjectMeta.Name), zap.String("resource_version", srcpkg.ObjectMeta.ResourceVersion))
 
@@ -95,13 +100,26 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, srcpkg *fv1.Package) 
 	if k8serrors.IsNotFound(err) {
 		e := "environment does not exist"
 		pkgw.logger.Error(e, zap.String("environment", pkg.Spec.Environment.Name))
-		updatePackage(pkgw.logger, pkgw.fissionClient, pkg,
+		_, er := updatePackage(pkgw.logger, pkgw.fissionClient, pkg,
 			fv1.BuildStatusFailed, fmt.Sprintf("%s: %q", e, pkg.Spec.Environment.Name), nil)
+		if er != nil {
+			pkgw.logger.Error(
+				"error updating package",
+				zap.String("package_name", pkg.ObjectMeta.Name),
+				zap.String("resource_version", pkg.ObjectMeta.ResourceVersion),
+				zap.Error(er),
+			)
+		}
 		return
 	}
 
+	// Create a new BackOff for health check on environment builder pod
+	healthCheckBackOff := utils.NewDefaultBackOff()
+	//if err != nil {
+	//	pkgw.logger.Error("Unable to create BackOff for Health Check", zap.Error(err))
+	//}
 	// Do health check for environment builder pod
-	for i := 0; i < 15; i++ {
+	for healthCheckBackOff.NextExists() {
 		// Informer store is not able to use label to find the pod,
 		// iterate all available environment builders.
 		items := pkgw.podStore.List()
@@ -112,7 +130,7 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, srcpkg *fv1.Package) 
 
 		if len(items) == 0 {
 			pkgw.logger.Info("builder pod does not exist for environment, will retry again later", zap.String("environment", pkg.Spec.Environment.Name))
-			time.Sleep(time.Duration(i*1) * time.Second)
+			time.Sleep(healthCheckBackOff.GetCurrentBackoffDuration())
 			continue
 		}
 
@@ -143,12 +161,12 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, srcpkg *fv1.Package) 
 
 			if !podIsReady {
 				pkgw.logger.Info("builder pod is not ready for environment, will retry again later", zap.String("environment", pkg.Spec.Environment.Name))
-				time.Sleep(time.Duration(i*1) * time.Second)
+				time.Sleep(healthCheckBackOff.GetCurrentBackoffDuration())
 				break
 			}
 
 			// Add the package getter rolebinding to builder sa
-			// we continue here if role binding was not setup succeesffully. this is because without this, the fetcher wont be able to fetch the source pkg into the container and
+			// we continue here if role binding was not setup successfully. this is because without this, the fetcher wont be able to fetch the source pkg into the container and
 			// the build will fail eventually
 			err := utils.SetupRoleBinding(pkgw.logger, pkgw.k8sClient, fv1.PackageGetterRB, pkg.ObjectMeta.Namespace, fv1.PackageGetterCR, fv1.ClusterRole, fv1.FissionBuilderSA, builderNs)
 			if err != nil {
@@ -168,7 +186,15 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, srcpkg *fv1.Package) 
 			uploadResp, buildLogs, err := buildPackage(ctx, pkgw.logger, pkgw.fissionClient, builderNs, pkgw.storageSvcUrl, pkg)
 			if err != nil {
 				pkgw.logger.Error("error building package", zap.Error(err), zap.String("package_name", pkg.ObjectMeta.Name))
-				updatePackage(pkgw.logger, pkgw.fissionClient, pkg, fv1.BuildStatusFailed, buildLogs, nil)
+				_, er := updatePackage(pkgw.logger, pkgw.fissionClient, pkg, fv1.BuildStatusFailed, buildLogs, nil)
+				if er != nil {
+					pkgw.logger.Error(
+						"error updating package",
+						zap.String("package_name", pkg.ObjectMeta.Name),
+						zap.String("resource_version", pkg.ObjectMeta.ResourceVersion),
+						zap.Error(er),
+					)
+				}
 				return
 			}
 
@@ -180,7 +206,15 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, srcpkg *fv1.Package) 
 				e := "error getting function list"
 				pkgw.logger.Error(e, zap.Error(err))
 				buildLogs += fmt.Sprintf("%s: %v\n", e, err)
-				updatePackage(pkgw.logger, pkgw.fissionClient, pkg, fv1.BuildStatusFailed, buildLogs, nil)
+				_, er := updatePackage(pkgw.logger, pkgw.fissionClient, pkg, fv1.BuildStatusFailed, buildLogs, nil)
+				if er != nil {
+					pkgw.logger.Error(
+						"error updating package",
+						zap.String("package_name", pkg.ObjectMeta.Name),
+						zap.String("resource_version", pkg.ObjectMeta.ResourceVersion),
+						zap.Error(er),
+					)
+				}
 			}
 
 			// A package may be used by multiple functions. Update
@@ -196,7 +230,15 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, srcpkg *fv1.Package) 
 						e := "error updating function package resource version"
 						pkgw.logger.Error(e, zap.Error(err))
 						buildLogs += fmt.Sprintf("%s: %v\n", e, err)
-						updatePackage(pkgw.logger, pkgw.fissionClient, pkg, fv1.BuildStatusFailed, buildLogs, nil)
+						_, er := updatePackage(pkgw.logger, pkgw.fissionClient, pkg, fv1.BuildStatusFailed, buildLogs, nil)
+						if er != nil {
+							pkgw.logger.Error(
+								"error updating package",
+								zap.String("package_name", pkg.ObjectMeta.Name),
+								zap.String("resource_version", pkg.ObjectMeta.ResourceVersion),
+								zap.Error(er),
+							)
+						}
 						return
 					}
 				}
@@ -206,17 +248,34 @@ func (pkgw *packageWatcher) build(buildCache *cache.Cache, srcpkg *fv1.Package) 
 				fv1.BuildStatusSucceeded, buildLogs, uploadResp)
 			if err != nil {
 				pkgw.logger.Error("error updating package info", zap.Error(err), zap.String("package_name", pkg.ObjectMeta.Name))
-				updatePackage(pkgw.logger, pkgw.fissionClient, pkg, fv1.BuildStatusFailed, buildLogs, nil)
+				_, er := updatePackage(pkgw.logger, pkgw.fissionClient, pkg, fv1.BuildStatusFailed, buildLogs, nil)
+				if er != nil {
+					pkgw.logger.Error(
+						"error updating package",
+						zap.String("package_name", pkg.ObjectMeta.Name),
+						zap.String("resource_version", pkg.ObjectMeta.ResourceVersion),
+						zap.Error(er),
+					)
+				}
 				return
 			}
 
 			pkgw.logger.Info("completed package build request", zap.String("package_name", pkg.ObjectMeta.Name))
 			return
 		}
+		time.Sleep(healthCheckBackOff.GetNext())
 	}
 	// build timeout
-	updatePackage(pkgw.logger, pkgw.fissionClient, pkg,
+	_, err = updatePackage(pkgw.logger, pkgw.fissionClient, pkg,
 		fv1.BuildStatusFailed, "Build timeout due to environment builder not ready", nil)
+	if err != nil {
+		pkgw.logger.Error(
+			"error updating package",
+			zap.String("package_name", pkg.ObjectMeta.Name),
+			zap.String("resource_version", pkg.ObjectMeta.ResourceVersion),
+			zap.Error(err),
+		)
+	}
 
 	pkgw.logger.Error("max retries exceeded in building source package, timeout due to environment builder not ready",
 		zap.String("package", fmt.Sprintf("%s.%s", pkg.ObjectMeta.Name, pkg.ObjectMeta.Namespace)))
@@ -258,7 +317,7 @@ func (pkgw *packageWatcher) watchPackages() {
 			// TODO: Once enable "/status", check generation for spec changed instead.
 			//   Before "/status" is enabled, the generation and resource version will be changed
 			//   if we update the status of a package, hence we are not able to differentiate
-			//   the spec change or status change. So we only build package which's status
+			//   the spec change or status change. So we only build package which has status
 			//   us "pending" and user have to use "kubectl replace" to update a package.
 			if oldPkg.ResourceVersion == pkg.ResourceVersion &&
 				pkg.Status.BuildStatus != fv1.BuildStatusPending {

@@ -18,18 +18,6 @@ travis_fold_end() {
     echo -e "travis_fold:end:$1\r"
 }
 
-helm_setup() {
-    helm init
-    # wait for tiller ready
-    while true; do
-      kubectl --namespace kube-system get pod|grep tiller|grep Running
-      if [[ $? -eq 0 ]]; then
-          break
-      fi
-      sleep 1
-    done
-}
-export -f helm_setup
 
 gcloud_login() {
     KEY=${HOME}/gcloud-service-key.json
@@ -222,7 +210,7 @@ set_environment() {
 }
 
 generate_test_id() {
-    echo $(cat /dev/urandom | tr -dc 'a-z' | fold -w 6 | head -n 1)
+    echo $(((10000 + $RANDOM) % 99999))
 }
 
 helm_install_fission() {
@@ -245,28 +233,32 @@ helm_install_fission() {
 
     helmVars=repository=$repo,image=$image,imageTag=$imageTag,fetcher.image=$fetcherImage,fetcher.imageTag=$fetcherImageTag,functionNamespace=$fns,controllerPort=$controllerNodeport,routerPort=$routerNodeport,pullPolicy=Always,analytics=false,debugEnv=true,pruneInterval=$pruneInterval,routerServiceType=$routerServiceType,serviceType=$serviceType,preUpgradeChecksImage=$preUpgradeCheckImage,prometheus.server.persistentVolume.enabled=false,prometheus.alertmanager.enabled=false,prometheus.kubeStateMetrics.enabled=false,prometheus.nodeExporter.enabled=false
 
-    timeout 30 bash -c "helm_setup"
 
     echo "Deleting old releases"
     helm list -q|xargs -I@ bash -c "helm_uninstall_fission @"
 
     # deleting ns does take a while after command is issued
-    while kubectl get ns| grep "fission-builder"
-    do
-        sleep 5
-    done
+    # while kubectl get ns| grep "fission-builder"
+    # do
+    #     sleep 5
+    # done
 
     helm dependency update $ROOT/charts/fission-all
 
+    echo "Creating namespace $ns"
+    kubectl create ns $ns
+    pushd $ROOT/charts/fission-all
+    echo "Cleaning up stale resources"
+    helm template . -ndefault| kubectl delete -f - || true
+    sleep 30
     echo "Installing fission"
-    helm install		\
+    helm install $id		\
 	 --wait			\
-	 --timeout 540	        \
-	 --name $id		\
+	 --timeout 540s	        \
 	 --set $helmVars	\
 	 --namespace $ns        \
-	 $ROOT/charts/fission-all
-
+	 .
+    popd
     helm list
     travis_fold_end helm_install_fission
 }
@@ -344,9 +336,12 @@ helm_uninstall_fission() {(set +e
 	    return
     fi
 
+    ns=f-$id
     echo "Uninstalling fission"
-    helm delete --purge $id
+    helm delete $id -n $ns || true
     kubectl delete ns f-$id || true
+    echo "Deleting CRDs"
+    kubectl get crd | grep "fission.io" | awk '{print $1}' | xargs -n1 kubectl delete crd
 )}
 export -f helm_uninstall_fission
 
@@ -404,7 +399,7 @@ dump_fission_logs() {
     component=$3
 
     echo --- $component logs ---
-    kubectl -n $ns get pod -o name | grep $component | xargs kubectl -n $ns logs
+    kubectl -n $ns get pod -o name | grep $component | xargs -n1 kubectl -n $ns logs
     echo --- end $component logs ---
 }
 
@@ -505,7 +500,10 @@ run_all_tests() {
     export GO_RUNTIME_IMAGE=gcr.io/$GKE_PROJECT_NAME/go-env:${imageTag}
     export GO_BUILDER_IMAGE=gcr.io/$GKE_PROJECT_NAME/go-env-builder:${imageTag}
     export JVM_RUNTIME_IMAGE=gcr.io/$GKE_PROJECT_NAME/jvm-env:${imageTag}
+    export JVM_JERSEY_RUNTIME_IMAGE=gcr.io/$GKE_PROJECT_NAME/jvm-jersey-env:${imageTag}
     export JVM_BUILDER_IMAGE=gcr.io/$GKE_PROJECT_NAME/jvm-env-builder:${imageTag}
+    export NODE_RUNTIME_IMAGE=gcr.io/$GKE_PROJECT_NAME/node-env:${imageTag}
+    export NODE_BUILDER_IMAGE=gcr.io/$GKE_PROJECT_NAME/node-env-builder:${imageTag}
     export TS_RUNTIME_IMAGE=gcr.io/$GKE_PROJECT_NAME/tensorflow-serving-env:${imageTag}
 
     set +e
@@ -532,7 +530,6 @@ run_all_tests() {
         $ROOT/test/tests/test_package_command.sh \
         $ROOT/test/tests/test_package_checksum.sh \
         $ROOT/test/tests/test_pass.sh \
-        $ROOT/test/tests/test_router_cache_invalidation.sh \
         $ROOT/test/tests/test_specs/test_spec.sh \
         $ROOT/test/tests/test_specs/test_spec_multifile.sh \
         $ROOT/test/tests/test_specs/test_spec_merge/test_spec_merge.sh \
@@ -550,6 +547,7 @@ run_all_tests() {
         $ROOT/test/tests/test_backend_newdeploy.sh \
         $ROOT/test/tests/test_environments/test_java_builder.sh \
         $ROOT/test/tests/test_environments/test_java_env.sh \
+        $ROOT/test/tests/test_environments/test_nodejs_env.sh \
         $ROOT/test/tests/test_fn_update/test_configmap_update.sh \
         $ROOT/test/tests/test_fn_update/test_env_update.sh \
         $ROOT/test/tests/test_fn_update/test_nd_pkg_update.sh \
@@ -600,11 +598,9 @@ install_and_test() {
     setupIngressController
 
     helm_install_fission $id $repo $image $imageTag $fetcherImage $fetcherImageTag $controllerPort $routerPort $pruneInterval $routerServiceType $serviceType $preUpgradeCheckImage
-    helm status $id | grep STATUS | grep -i deployed
     if [ $? -ne 0 ]; then
         describe_all_pods $id
         dump_kubernetes_events $id
-        dump_tiller_logs
 	    exit 1
     fi
 
@@ -622,7 +618,7 @@ install_and_test() {
         # Commented out due to Travis-CI log length limit
         # describe each pod in fission ns and function namespace
         # describe_all_pods $id
-	      exit 1
+	    exit 1
     fi
 }
 

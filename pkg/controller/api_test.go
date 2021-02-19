@@ -30,7 +30,8 @@ import (
 
 	uuid "github.com/satori/go.uuid"
 	"go.uber.org/zap"
-	"k8s.io/api/core/v1"
+	"go.uber.org/zap/zapcore"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	fv1 "github.com/fission/fission/pkg/apis/core/v1"
@@ -128,7 +129,7 @@ func TestFunctionApi(t *testing.T) {
 	testFunc.ObjectMeta.Name = "bar"
 	m2, err := g.Client().V1().Function().Create(testFunc)
 	panicIf(err)
-	defer g.Client().V1().Function().Delete(m2)
+	defer panicIf(g.Client().V1().Function().Delete(m2))
 
 	funcs, err := g.Client().V1().Function().List(testNS)
 	panicIf(err)
@@ -172,7 +173,7 @@ func TestHTTPTriggerApi(t *testing.T) {
 
 	m, err := g.Client().V1().HTTPTrigger().Create(testTrigger)
 	panicIf(err)
-	defer g.Client().V1().HTTPTrigger().Delete(m)
+	defer panicIf(g.Client().V1().HTTPTrigger().Delete(m))
 
 	_, err = g.Client().V1().HTTPTrigger().Create(testTrigger)
 	assertNameReuseFailure(err, "httptrigger")
@@ -197,7 +198,7 @@ func TestHTTPTriggerApi(t *testing.T) {
 	testTrigger.Spec.RelativeURL = "/hi2"
 	m2, err := g.Client().V1().HTTPTrigger().Create(testTrigger)
 	panicIf(err)
-	defer g.Client().V1().HTTPTrigger().Delete(m2)
+	defer panicIf(g.Client().V1().HTTPTrigger().Delete(m2))
 
 	ts, err := g.Client().V1().HTTPTrigger().List(testNS)
 	panicIf(err)
@@ -226,7 +227,7 @@ func TestEnvironmentApi(t *testing.T) {
 
 	m, err := g.Client().V1().Environment().Create(testEnv)
 	panicIf(err)
-	defer g.Client().V1().Environment().Delete(m)
+	defer panicIf(g.Client().V1().Environment().Delete(m))
 
 	_, err = g.Client().V1().Environment().Create(testEnv)
 	assertNameReuseFailure(err, "environment")
@@ -245,7 +246,7 @@ func TestEnvironmentApi(t *testing.T) {
 
 	m2, err := g.Client().V1().Environment().Create(testEnv)
 	panicIf(err)
-	defer g.Client().V1().Environment().Delete(m2)
+	defer panicIf(g.Client().V1().Environment().Delete(m2))
 
 	ts, err := g.Client().V1().Environment().List(testNS)
 	panicIf(err)
@@ -275,7 +276,7 @@ func TestWatchApi(t *testing.T) {
 
 	m, err := g.Client().V1().KubeWatcher().Create(testWatch)
 	panicIf(err)
-	defer g.Client().V1().KubeWatcher().Delete(m)
+	defer panicIf(g.Client().V1().KubeWatcher().Delete(m))
 
 	_, err = g.Client().V1().KubeWatcher().Create(testWatch)
 	assertNameReuseFailure(err, "watch")
@@ -290,7 +291,7 @@ func TestWatchApi(t *testing.T) {
 	testWatch.ObjectMeta.Name = "yyy"
 	m2, err := g.Client().V1().KubeWatcher().Create(testWatch)
 	panicIf(err)
-	defer g.Client().V1().KubeWatcher().Delete(m2)
+	defer panicIf(g.Client().V1().KubeWatcher().Delete(m2))
 
 	ws, err := g.Client().V1().KubeWatcher().List(testNS)
 	panicIf(err)
@@ -316,7 +317,7 @@ func TestTimeTriggerApi(t *testing.T) {
 
 	m, err := g.Client().V1().TimeTrigger().Create(testTrigger)
 	panicIf(err)
-	defer g.Client().V1().TimeTrigger().Delete(m)
+	defer panicIf(g.Client().V1().TimeTrigger().Delete(m))
 
 	_, err = g.Client().V1().TimeTrigger().Create(testTrigger)
 	assertNameReuseFailure(err, "trigger")
@@ -358,14 +359,18 @@ func TestMain(m *testing.M) {
 
 	// testNS isolation for running multiple CI builds concurrently.
 	testNS = uuid.NewV4().String()
-	kubeClient.CoreV1().Namespaces().Create(&v1.Namespace{
+	_, err = kubeClient.CoreV1().Namespaces().Create(&v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: testNS,
 		},
 	})
-	defer kubeClient.CoreV1().Namespaces().Delete(testNS, nil)
+	panicIf(err)
+	defer panicIf(kubeClient.CoreV1().Namespaces().Delete(testNS, nil))
 
-	logger, err := zap.NewDevelopment()
+	config := zap.NewDevelopmentConfig()
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	logger, err := config.Build()
+
 	panicIf(err)
 
 	go Start(logger, 8888, true)

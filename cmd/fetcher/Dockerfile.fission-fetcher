@@ -12,7 +12,7 @@ COPY go.* ./
 
 RUN go mod download
 
-From godep as builder
+FROM godep as builder
 
 ARG GOPKG
 WORKDIR /go/src/${GOPKG}
@@ -31,7 +31,7 @@ ARG BUILDVERSION=unknown
 ARG BUILDDATE=unknown
 # E.g. BUILDDATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+RUN CGO_ENABLED=0 go build \
     -o /go/bin/fetcher \
     -gcflags=-trimpath=$GOPATH \
     -asmflags=-trimpath=$GOPATH \

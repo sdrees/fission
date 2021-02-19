@@ -17,9 +17,10 @@ limitations under the License.
 package flagkey
 
 const (
-	Verbosity  = "verbosity"
-	Server     = "server"
-	ClientOnly = "client-only"
+	Verbosity   = "verbosity"
+	Server      = "server"
+	ClientOnly  = "client-only"
+	KubeContext = "kube-context"
 
 	resourceName = "name"
 	force        = "force"
@@ -62,6 +63,7 @@ const (
 	FnTestHeader            = "header"
 	FnTestQuery             = "query"
 	FnIdleTimeout           = "idletimeout"
+	FnConcurrency           = "concurrency"
 
 	HtName              = resourceName
 	HtMethod            = "method"
@@ -80,14 +82,21 @@ const (
 	TtFnName = "function"
 	TtRound  = "round"
 
-	MqtName           = resourceName
-	MqtFnName         = "function"
-	MqtMQType         = "mqtype"
-	MqtTopic          = "topic"
-	MqtRespTopic      = "resptopic"
-	MqtErrorTopic     = "errortopic"
-	MqtMaxRetries     = "maxretries"
-	MqtMsgContentType = "contenttype"
+	MqtName            = resourceName
+	MqtFnName          = "function"
+	MqtMQType          = "mqtype"
+	MqtTopic           = "topic"
+	MqtRespTopic       = "resptopic"
+	MqtErrorTopic      = "errortopic"
+	MqtMaxRetries      = "maxretries"
+	MqtMsgContentType  = "contenttype"
+	MqtPollingInterval = "pollinginterval"
+	MqtCooldownPeriod  = "cooldownperiod"
+	MqtMinReplicaCount = "minreplicacount"
+	MqtMaxReplicaCount = "maxreplicacount"
+	MqtMetadata        = "metadata"
+	MqtSecret          = "secret"
+	MqtKind            = "mqtkind"
 
 	EnvName            = resourceName
 	EnvPoolsize        = "poolsize"
@@ -128,6 +137,7 @@ const (
 	SpecWatch    = "watch"
 	SpecDelete   = "delete"
 	SpecDry      = "dry"
+	SpecValidate = "validation"
 
 	SupportOutput = Output
 	SupportNoZip  = "nozip"

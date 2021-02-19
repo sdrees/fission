@@ -1,16 +1,16 @@
 ####################################
 # This file can be used with Skaffold (https://github.com/GoogleContainerTools/skaffold) to
 # build and deploy Fission to Kubernetes cluster.
+# Skaffold version v1.10.1 is used for this configuration.
 ############## Usage ##############
 # Skaffold CLI should be installed on your machine. 
-# Skaffold default-repo should be configured before using locally
-# $ skaffold config set default-repo <YOUR_DOCKER_BASE_REPO>
-# Run `TAG=1313 skaffold run` to build and deploy with helm - where replace value of tag to what you want to use as tag for image
-# Run`skaffold build` to only build and push images
-############## Future Improvement/Limitations ##############
-# 1) [LOW]  Add profiles to suit various deployment needs
+# For building & deploying to Cloud Provider
+# $ skaffold config set default-repo vishalbiyani (vishalbiyani - should be your registry/Dockerhub handle)
+# $ `skaffold run` 
+# For building & deploying to Kind cluster use Kind profile
+# $ `skaffold run -p kind`
 ####################################
-apiVersion: skaffold/v2beta1
+apiVersion: skaffold/v2beta4
 kind: Config
 build:
   artifacts:
@@ -24,31 +24,59 @@ build:
     - image: preupgradechecks
       docker:
         dockerfile: cmd/preupgradechecks/Dockerfile.fission-preupgradechecks
-  tagPolicy:
-    envTemplate:
-      template: "{{.IMAGE_NAME}}:{{.TAG}}"
 
 deploy:
   helm:
+    flags:
+      upgrade:
+        ["--timeout=3m", "--install","--dependency-update", "--force", "--debug"]
+      install:
+        ["--timeout=3m","--debug","--dependency-update"]
     releases:
       - name: fission
         chartPath: ./charts/fission-all
         valuesFiles:
           - ./charts/fission-all/values.yaml
         namespace: "fission"
+        artifactOverrides:
+          image: "fission"
+          preUpgradeChecksImage: "preupgradechecks"
+          fetcher.image: "fetcher"        
         setValues:
           namespace: fission
-          repository: index.docker.io
-        # The env template values only should go in setValueTemplates, all other overrides in setValues
-        setValueTemplates:
-          image: fission
-          preUpgradeChecksImage: preupgradechecks
-          fetcher.image: fetcher
-          fetcher.imageTag: "{{.TAG}}"
-          imageTag: "{{.TAG}}"
+          repository: "index.docker.io"
+          routerServiceType: LoadBalancer
+          pruneInterval: 60
+          fetcher.imageTag: ""
+          imageTag: ""
+          prometheus.enabled: false
         wait: true
         recreatePods: false
         packaged: null
         imageStrategy:
           fqn: null
           helm: null
+
+profiles:
+  - name: kind
+    patches:
+      - op: replace
+        path: /deploy/helm/releases/0/setValues/repository
+        value: ""
+      - op: replace
+        path: /deploy/helm/releases/0/setValues/routerServiceType
+        value: "NodePort"
+  - name: kind-ci
+    patches:
+    - op: replace
+      path: /deploy/helm/releases/0/setValues/repository
+      value: ""
+    - op: replace
+      path: /deploy/helm/releases/0/setValues/pruneInterval
+      value: 1
+    - op: replace
+      path: /deploy/helm/releases/0/setValues/routerServiceType
+      value: "NodePort"
+    - op: replace
+      path: /deploy/helm/releases/0/setValues/prometheus.enabled
+      value: true

@@ -58,7 +58,7 @@ type (
 )
 
 func makeVolumeDir(dirPath string) error {
-	return os.MkdirAll(dirPath, os.ModeDir|0700)
+	return os.MkdirAll(dirPath, os.ModeDir|0750)
 }
 
 func MakeFetcher(logger *zap.Logger, sharedVolumePath string, sharedSecretPath string, sharedConfigPath string) (*Fetcher, error) {
@@ -106,7 +106,7 @@ func verifyChecksum(fileChecksum, checksum *fv1.Checksum) error {
 func writeSecretOrConfigMap(dataMap map[string][]byte, dirPath string) error {
 	for key, val := range dataMap {
 		writeFilePath := filepath.Join(dirPath, key)
-		err := ioutil.WriteFile(writeFilePath, val, 0600)
+		err := ioutil.WriteFile(writeFilePath, val, 0750)
 		if err != nil {
 			return errors.Wrapf(err, "Failed to write file %s", writeFilePath)
 		}
@@ -116,7 +116,10 @@ func writeSecretOrConfigMap(dataMap map[string][]byte, dirPath string) error {
 
 func (fetcher *Fetcher) VersionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Write([]byte(info.BuildInfo().String()))
+	_, err := w.Write([]byte(info.BuildInfo().String()))
+	if err != nil {
+		fetcher.logger.Error("error writing response", zap.Error(err))
+	}
 }
 
 func (fetcher *Fetcher) FetchHandler(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +256,7 @@ func (fetcher *Fetcher) Fetch(ctx context.Context, pkg *fv1.Package, req Functio
 			}
 			archive = &pkg.Spec.Deployment
 		} else {
-			return http.StatusBadRequest, fmt.Errorf("unkonwn fetch type: %v", req.FetchType)
+			return http.StatusBadRequest, fmt.Errorf("unknown fetch type: %v", req.FetchType)
 		}
 
 		// get package data as literal or by url
@@ -297,7 +300,7 @@ func (fetcher *Fetcher) Fetch(ctx context.Context, pkg *fv1.Package, req Functio
 		tmpUnarchivePath := filepath.Join(fetcher.sharedVolumePath, uuid.NewV4().String())
 		err := fetcher.unarchive(tmpPath, tmpUnarchivePath)
 		if err != nil {
-			fetcher.logger.Error("error unarchiving",
+			fetcher.logger.Error("error unarchive",
 				zap.Error(err),
 				zap.String("archive_location", tmpPath),
 				zap.String("target_location", tmpUnarchivePath))
@@ -347,7 +350,7 @@ func (fetcher *Fetcher) FetchSecretsAndCfgMaps(secrets []fv1.SecretReference, cf
 
 			secretPath := filepath.Join(secret.Namespace, secret.Name)
 			secretDir := filepath.Join(fetcher.sharedSecretPath, secretPath)
-			err = os.MkdirAll(secretDir, os.ModeDir|0644)
+			err = os.MkdirAll(secretDir, os.ModeDir|0750)
 			if err != nil {
 				e := "failed to create directory for secret"
 				fetcher.logger.Error(e,
@@ -391,7 +394,7 @@ func (fetcher *Fetcher) FetchSecretsAndCfgMaps(secrets []fv1.SecretReference, cf
 
 			configPath := filepath.Join(config.Namespace, config.Name)
 			configDir := filepath.Join(fetcher.sharedConfigPath, configPath)
-			err = os.MkdirAll(configDir, os.ModeDir|0644)
+			err = os.MkdirAll(configDir, os.ModeDir|0750)
 			if err != nil {
 				e := "failed to create directory for configmap"
 				fetcher.logger.Error(e,
@@ -506,7 +509,12 @@ func (fetcher *Fetcher) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	fetcher.logger.Info("completed upload request")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(rBody)
+	_, err = w.Write(rBody)
+	if err != nil {
+		e := "error writing response"
+		fetcher.logger.Error(e, zap.Error(err))
+		http.Error(w, fmt.Sprintf("%s: %v", e, err), http.StatusInternalServerError)
+	}
 }
 
 func (fetcher *Fetcher) rename(src string, dst string) error {
